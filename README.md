@@ -9,18 +9,23 @@ A Go application that scans your hard drive for git repositories and reports on 
 - 📊 **Detailed reporting**: Shows branch name, unstaged changes, staged changes, and untracked files
 - 🚫 **Smart filtering**: Skips system directories and common build folders to improve performance
 - 📈 **Summary statistics**: Provides a count of clean vs. dirty repositories
+- 🛠️ **Ownership issue detection**: Identifies and provides guidance for Git ownership problems
+- 🔧 **Debug mode**: Optional debug output for troubleshooting
 
 ## Usage
 
 ```bash
 # Scan a specific directory
-go run main.go C:\Users\YourName\Documents
+./find-uncommitted.exe C:\somedirectory
 
 # Scan the entire C: drive (may take a while)
-go run main.go C:\
+./find-uncommitted.exe C:\
 
 # Scan current directory
-go run main.go .
+./find-uncommitted.exe .
+
+# Enable debug output
+./find-uncommitted.exe --debug C:\somedirectory
 ```
 
 ## Output Example
@@ -46,8 +51,32 @@ Found 3 git repositories:
    ⚠️  Has uncommitted changes:
       • Staged changes
 
-Summary: 1 clean repositories, 2 repositories with uncommitted changes
+Summary: 1 clean repositories, 2 repositories with uncommitted changes, 0 repositories with errors
 ```
+
+## Git Ownership Issues
+
+If you encounter "dubious ownership" errors, the tool will provide specific guidance:
+
+```
+📁 ..\somedirectory
+   Branch: unknown
+   ❌ Error: Git ownership issue - run: git config --global --add safe.directory C:/somedirectory
+```
+
+### Automatic Fix
+
+Use the included ownership fixer tool:
+
+```bash
+# Fix ownership issues for all repositories in a directory
+./fix-ownership-tool/fix-ownership.exe C:\somedirectory
+
+# With debug output
+./fix-ownership-tool/fix-ownership.exe --debug C:\somedirectory
+```
+
+This will automatically run the necessary `git config` commands to resolve ownership issues.
 
 ## Requirements
 
@@ -57,11 +86,13 @@ Summary: 1 clean repositories, 2 repositories with uncommitted changes
 ## Building
 
 ```bash
-# Build the executable
+# Build the main executable
 go build -o find-uncommitted.exe main.go
 
-# Run the executable
-./find-uncommitted.exe C:\
+# Build the ownership fixer
+cd fix-ownership-tool
+go build -o fix-ownership.exe fix-ownership.go
+cd ..
 ```
 
 ## How it works
@@ -75,9 +106,22 @@ go build -o find-uncommitted.exe main.go
    - Untracked files (`git ls-files --others --exclude-standard`)
 4. **Concurrent Processing**: Uses goroutines to check multiple repositories simultaneously
 5. **Results Display**: Shows a formatted report with emojis and clear status indicators
+6. **Error Handling**: Provides specific guidance for common Git issues like ownership problems
 
 ## Performance Notes
 
 - The application skips common system directories and build folders to improve scanning speed
 - Concurrent processing means checking many repositories won't take proportionally longer
-- Large drives may take several minutes to scan completely 
+- Large drives may take several minutes to scan completely
+- Debug mode adds output but may slow down processing slightly
+
+## Troubleshooting
+
+### Debug Mode
+Use the `--debug` flag to see detailed information about directory scanning and repository detection.
+
+### Ownership Issues
+If you see ownership errors, run the fix-ownership tool first, then run the main tool again.
+
+### Timing Issues
+If the fix-ownership tool doesn't seem to work immediately, try running it with the `--debug` flag or wait a few seconds before running the main tool again. 

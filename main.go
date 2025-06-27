@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,14 +20,21 @@ type RepoStatus struct {
 	Error        string
 }
 
+var debugMode bool
+
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run main.go <directory_to_scan>")
+	flag.BoolVar(&debugMode, "debug", false, "Enable debug output")
+	flag.Parse()
+
+	args := flag.Args()
+	if len(args) < 1 {
+		fmt.Println("Usage: go run main.go [--debug] <directory_to_scan>")
 		fmt.Println("Example: go run main.go C:\\")
+		fmt.Println("Example: go run main.go --debug C:\\")
 		os.Exit(1)
 	}
 
-	rootDir := os.Args[1]
+	rootDir := args[0]
 	fmt.Printf("Scanning for git repositories in: %s\n", rootDir)
 	fmt.Println("This may take a while depending on the size of your drive...")
 	fmt.Println()
@@ -73,15 +81,18 @@ func main() {
 	// Summary
 	cleanCount := 0
 	dirtyCount := 0
+	errorCount := 0
 	for _, status := range results {
-		if status.IsClean {
+		if status.Error != "" {
+			errorCount++
+		} else if status.IsClean {
 			cleanCount++
 		} else {
 			dirtyCount++
 		}
 	}
 
-	fmt.Printf("\nSummary: %d clean repositories, %d repositories with uncommitted changes\n", cleanCount, dirtyCount)
+	fmt.Printf("\nSummary: %d clean repositories, %d repositories with uncommitted changes, %d repositories with errors\n", cleanCount, dirtyCount, errorCount)
 }
 
 func findGitRepos(rootDir string) []string {
@@ -89,16 +100,22 @@ func findGitRepos(rootDir string) []string {
 
 	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			fmt.Printf("[DEBUG] Skipping (error accessing): %s\n", path)
+			if debugMode {
+				fmt.Printf("[DEBUG] Skipping (error accessing): %s\n", path)
+			}
 			return nil
 		}
 
 		if info.IsDir() {
-			fmt.Printf("[DEBUG] Visiting: %s\n", path)
+			if debugMode {
+				fmt.Printf("[DEBUG] Visiting: %s\n", path)
+			}
 
 			// Check if this is a .git directory FIRST
 			if filepath.Base(path) == ".git" {
-				fmt.Printf("[DEBUG] Found .git directory: %s\n", path)
+				if debugMode {
+					fmt.Printf("[DEBUG] Found .git directory: %s\n", path)
+				}
 				repoPath := filepath.Dir(path)
 				repos = append(repos, repoPath)
 				return filepath.SkipDir
@@ -114,7 +131,9 @@ func findGitRepos(rootDir string) []string {
 				strings.Contains(path, "\\Windows\\") ||
 				strings.Contains(path, "\\Program Files\\") ||
 				strings.Contains(path, "\\Program Files (x86)\\") {
-				fmt.Printf("[DEBUG] Skipping directory: %s\n", path)
+				if debugMode {
+					fmt.Printf("[DEBUG] Skipping directory: %s\n", path)
+				}
 				return filepath.SkipDir
 			}
 		}
@@ -132,6 +151,21 @@ func findGitRepos(rootDir string) []string {
 func checkRepoStatus(repoPath string) RepoStatus {
 	status := RepoStatus{
 		Path: repoPath,
+	}
+
+	// First check if this is a valid git repository
+	_, err := exec.Command("git", "-C", repoPath, "rev-parse", "--git-dir").Output()
+	if err != nil {
+		// Check if it's a dubious ownership error
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			errOutput := string(exitErr.Stderr)
+			if strings.Contains(errOutput, "dubious ownership") {
+				status.Error = "Git ownership issue - run: git config --global --add safe.directory " + strings.ReplaceAll(repoPath, "\\", "/")
+				return status
+			}
+		}
+		status.Error = "Not a valid git repository"
+		return status
 	}
 
 	// Get current branch
