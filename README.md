@@ -14,6 +14,7 @@ A Go application that scans your hard drive for git repositories and reports on 
 
 ## Usage
 
+### Windows
 ```bash
 # Scan a specific directory
 ./find-uncommitted.exe C:\somedirectory
@@ -28,8 +29,24 @@ A Go application that scans your hard drive for git repositories and reports on 
 ./find-uncommitted.exe --debug C:\somedirectory
 ```
 
+### Linux/macOS
+```bash
+# Scan a specific directory
+./find-uncommitted /home/username/projects
+
+# Scan the entire home directory (may take a while)
+./find-uncommitted /home/username
+
+# Scan current directory
+./find-uncommitted .
+
+# Enable debug output
+./find-uncommitted --debug /home/username/projects
+```
+
 ## Output Example
 
+### Windows
 ```
 Scanning for git repositories in: C:\Users\YourName\Documents
 This may take a while depending on the size of your drive...
@@ -54,6 +71,31 @@ Found 3 git repositories:
 Summary: 1 clean repositories, 2 repositories with uncommitted changes, 0 repositories with errors
 ```
 
+### Linux/macOS
+```
+Scanning for git repositories in: /home/username/projects
+This may take a while depending on the size of your drive...
+
+Found 3 git repositories:
+
+📁 /home/username/projects/my-project
+   Branch: main
+   ✅ Clean
+
+📁 /home/username/projects/work-project
+   Branch: feature/new-feature
+   ⚠️  Has uncommitted changes:
+      • Unstaged changes
+      • Untracked files
+
+📁 /home/username/projects/old-project
+   Branch: develop
+   ⚠️  Has uncommitted changes:
+      • Staged changes
+
+Summary: 1 clean repositories, 2 repositories with uncommitted changes, 0 repositories with errors
+```
+
 ## Git Ownership Issues
 
 If you encounter "dubious ownership" errors, the tool will provide specific guidance:
@@ -68,12 +110,22 @@ If you encounter "dubious ownership" errors, the tool will provide specific guid
 
 Use the included ownership fixer tool:
 
+#### Windows
 ```bash
 # Fix ownership issues for all repositories in a directory
 ./fix-ownership-tool/fix-ownership.exe C:\somedirectory
 
 # With debug output
 ./fix-ownership-tool/fix-ownership.exe --debug C:\somedirectory
+```
+
+#### Linux/macOS
+```bash
+# Fix ownership issues for all repositories in a directory
+./fix-ownership-tool/fix-ownership /home/username/projects
+
+# With debug output
+./fix-ownership-tool/fix-ownership --debug /home/username/projects
 ```
 
 This will automatically run the necessary `git config` commands to resolve ownership issues.
@@ -85,6 +137,7 @@ This will automatically run the necessary `git config` commands to resolve owner
 
 ## Building
 
+### Windows
 ```bash
 # Build the main executable
 go build -o find-uncommitted.exe main.go
@@ -92,6 +145,32 @@ go build -o find-uncommitted.exe main.go
 # Build the ownership fixer
 cd fix-ownership-tool
 go build -o fix-ownership.exe fix-ownership.go
+cd ..
+```
+
+### Linux/macOS
+```bash
+# Build the main executable
+go build -o find-uncommitted main.go
+
+# Build the ownership fixer
+cd fix-ownership-tool
+go build -o fix-ownership fix-ownership.go
+cd ..
+```
+
+### Cross-platform build
+```bash
+# Build for Windows from Linux/macOS
+GOOS=windows GOARCH=amd64 go build -o find-uncommitted.exe main.go
+cd fix-ownership-tool
+GOOS=windows GOARCH=amd64 go build -o fix-ownership.exe fix-ownership.go
+cd ..
+
+# Build for Linux from Windows
+GOOS=linux GOARCH=amd64 go build -o find-uncommitted main.go
+cd fix-ownership-tool
+GOOS=linux GOARCH=amd64 go build -o fix-ownership fix-ownership.go
 cd ..
 ```
 
