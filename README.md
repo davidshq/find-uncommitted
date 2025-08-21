@@ -6,7 +6,7 @@ A Go application that scans your hard drive for git repositories and reports on 
 
 - 🔍 **Recursive scanning**: Automatically finds all git repositories in the specified directory
 - ⚡ **Concurrent processing**: Uses goroutines to check repository status in parallel
-- 📊 **Detailed reporting**: Shows branch name, unstaged changes, staged changes, and untracked files
+- 📊 **Detailed reporting**: Shows branch name, unstaged changes, staged changes, untracked files, and unpushed commits
 - 🚫 **Smart filtering**: Skips system directories and common build folders to improve performance
 - 📈 **Summary statistics**: Provides a count of clean vs. dirty repositories
 - 🛠️ **Ownership issue detection**: Identifies and provides guidance for Git ownership problems
@@ -46,55 +46,33 @@ A Go application that scans your hard drive for git repositories and reports on 
 
 ## Output Example
 
-### Windows
-```
-Scanning for git repositories in: C:\Users\YourName\Documents
-This may take a while depending on the size of your drive...
+The tool now displays results in a clean tabular format:
 
-Found 3 git repositories:
-
-📁 C:\Users\YourName\Documents\my-project
-   Branch: main
-   ✅ Clean
-
-📁 C:\Users\YourName\Documents\work-project
-   Branch: feature/new-feature
-   ⚠️  Has uncommitted changes:
-      • Unstaged changes
-      • Untracked files
-
-📁 C:\Users\YourName\Documents\old-project
-   Branch: develop
-   ⚠️  Has uncommitted changes:
-      • Staged changes
-
-Summary: 1 clean repositories, 2 repositories with uncommitted changes, 0 repositories with errors
-```
-
-### Linux/macOS
 ```
 Scanning for git repositories in: /home/username/projects
 This may take a while depending on the size of your drive...
 
-Found 3 git repositories:
+Found 24 git repositories:
 
-📁 /home/username/projects/my-project
-   Branch: main
-   ✅ Clean
+Repository                                    Branch          Status   Changes
+------------------------------------------------------------------------------------------
+../my-project                                 main            ✅ Clean    -
+../work-project                               feature/new...  ⚠️  Dirty  unstaged, untracked
+../old-project                                develop         ⚠️  Dirty  staged
+../notes-project                              master          ⚠️  Dirty  unpushed
 
-📁 /home/username/projects/work-project
-   Branch: feature/new-feature
-   ⚠️  Has uncommitted changes:
-      • Unstaged changes
-      • Untracked files
-
-📁 /home/username/projects/old-project
-   Branch: develop
-   ⚠️  Has uncommitted changes:
-      • Staged changes
-
-Summary: 1 clean repositories, 2 repositories with uncommitted changes, 0 repositories with errors
+Summary: 21 clean repositories, 3 repositories with uncommitted changes, 0 repositories with errors
 ```
+
+The output shows:
+- **Repository**: Path to the git repository (truncated for readability)
+- **Branch**: Current branch name (truncated if too long)
+- **Status**: ✅ Clean or ⚠️ Dirty
+- **Changes**: Specific types of changes detected:
+  - `unstaged`: Modified files not yet staged
+  - `staged`: Files staged for commit
+  - `untracked`: New files not tracked by git
+  - `unpushed`: Commits that haven't been pushed to remote
 
 ## Git Ownership Issues
 
@@ -183,6 +161,7 @@ cd ..
    - Unstaged changes (`git diff --name-only`)
    - Staged changes (`git diff --cached --name-only`)
    - Untracked files (`git ls-files --others --exclude-standard`)
+   - Unpushed commits (`git rev-list --count @{u}..HEAD`)
 4. **Concurrent Processing**: Uses goroutines to check multiple repositories simultaneously
 5. **Results Display**: Shows a formatted report with emojis and clear status indicators
 6. **Error Handling**: Provides specific guidance for common Git issues like ownership problems

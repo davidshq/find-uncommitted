@@ -15,6 +15,7 @@ type RepoStatus struct {
 	HasUnstaged  bool
 	HasStaged    bool
 	HasUntracked bool
+	HasUnpushed  bool
 	Branch       string
 	IsClean      bool
 	Error        string
@@ -73,10 +74,8 @@ func main() {
 		results = append(results, status)
 	}
 
-	// Display results
-	for _, status := range results {
-		displayRepoStatus(status)
-	}
+	// Display results in tabular format
+	displayRepoStatusTable(results)
 
 	// Summary
 	cleanCount := 0
@@ -226,38 +225,91 @@ func checkRepoStatus(repoPath string) RepoStatus {
 	}
 	status.HasUntracked = len(strings.TrimSpace(string(untracked))) > 0
 
+	// Check for unpushed commits
+	unpushed, err := exec.Command("git", "-C", repoPath, "rev-list", "--count", "@{u}..HEAD").Output()
+	if err != nil {
+		// If there's no upstream branch, check if there are any commits at all
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 128 {
+			// No upstream branch, check if we have any commits
+			commitCount, commitErr := exec.Command("git", "-C", repoPath, "rev-list", "--count", "HEAD").Output()
+			if commitErr == nil {
+				count := strings.TrimSpace(string(commitCount))
+				if count != "0" {
+					status.HasUnpushed = true
+				}
+			}
+		} else {
+			// Other error, log it but don't fail the entire check
+			if debugMode {
+				fmt.Printf("[DEBUG] Failed to check unpushed commits in %s: %v\n", repoPath, err)
+			}
+		}
+	} else {
+		count := strings.TrimSpace(string(unpushed))
+		if count != "0" {
+			status.HasUnpushed = true
+		}
+	}
+
 	// Determine if repository is clean
-	status.IsClean = !status.HasUnstaged && !status.HasStaged && !status.HasUntracked
+	status.IsClean = !status.HasUnstaged && !status.HasStaged && !status.HasUntracked && !status.HasUnpushed
 
 	return status
 }
 
-func displayRepoStatus(status RepoStatus) {
-	// Get relative path for cleaner display
+func displayRepoStatusTable(results []RepoStatus) {
+	// Get working directory for relative paths
 	wd, _ := os.Getwd()
-	relPath, _ := filepath.Rel(wd, status.Path)
-	if relPath == "." {
-		relPath = status.Path
-	}
 
-	fmt.Printf("📁 %s\n", relPath)
-	fmt.Printf("   Branch: %s\n", status.Branch)
+	// Print table header
+	fmt.Printf("%-45s %-15s %-8s %s\n", "Repository", "Branch", "Status", "Changes")
+	fmt.Println(strings.Repeat("-", 90))
 
-	if status.Error != "" {
-		fmt.Printf("   ❌ Error: %s\n", status.Error)
-	} else if status.IsClean {
-		fmt.Printf("   ✅ Clean\n")
-	} else {
-		fmt.Printf("   ⚠️  Has uncommitted changes:\n")
-		if status.HasUnstaged {
-			fmt.Printf("      • Unstaged changes\n")
+	// Print each repository as a table row
+	for _, status := range results {
+		// Get relative path for cleaner display
+		relPath, _ := filepath.Rel(wd, status.Path)
+		if relPath == "." {
+			relPath = status.Path
 		}
-		if status.HasStaged {
-			fmt.Printf("      • Staged changes\n")
+
+		// Truncate long paths
+		if len(relPath) > 42 {
+			relPath = "..." + relPath[len(relPath)-39:]
 		}
-		if status.HasUntracked {
-			fmt.Printf("      • Untracked files\n")
+
+		// Determine status and changes
+		var statusText, changesText string
+		if status.Error != "" {
+			statusText = "❌ Error"
+			changesText = status.Error
+		} else if status.IsClean {
+			statusText = "✅ Clean"
+			changesText = "-"
+		} else {
+			statusText = "⚠️  Dirty"
+			var changes []string
+			if status.HasUnstaged {
+				changes = append(changes, "unstaged")
+			}
+			if status.HasStaged {
+				changes = append(changes, "staged")
+			}
+			if status.HasUntracked {
+				changes = append(changes, "untracked")
+			}
+			if status.HasUnpushed {
+				changes = append(changes, "unpushed")
+			}
+			changesText = strings.Join(changes, ", ")
 		}
+
+		// Truncate long branch names
+		branch := status.Branch
+		if len(branch) > 17 {
+			branch = branch[:14] + "..."
+		}
+
+		fmt.Printf("%-50s %-20s %-10s %s\n", relPath, branch, statusText, changesText)
 	}
-	fmt.Println()
 }
