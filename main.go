@@ -22,21 +22,27 @@ type RepoStatus struct {
 }
 
 var debugMode bool
+var dirtyOnly bool
 
 func main() {
 	flag.BoolVar(&debugMode, "debug", false, "Enable debug output")
+	flag.BoolVar(&dirtyOnly, "dirty-only", false, "Show only repositories with uncommitted changes")
 	flag.Parse()
 
 	args := flag.Args()
 	if len(args) < 1 {
-		fmt.Println("Usage: go run main.go [--debug] <directory_to_scan>")
+		fmt.Println("Usage: go run main.go [--debug] [--dirty-only] <directory_to_scan>")
 		fmt.Println("Example: go run main.go C:\\")
 		fmt.Println("Example: go run main.go --debug C:\\")
+		fmt.Println("Example: go run main.go --dirty-only C:\\")
 		os.Exit(1)
 	}
 
 	rootDir := args[0]
 	fmt.Printf("Scanning for git repositories in: %s\n", rootDir)
+	if dirtyOnly {
+		fmt.Println("Showing only repositories with uncommitted changes...")
+	}
 	fmt.Println("This may take a while depending on the size of your drive...")
 	fmt.Println()
 
@@ -71,6 +77,10 @@ func main() {
 	// Collect and display results
 	var results []RepoStatus
 	for status := range statusChan {
+		// Filter out clean repositories if --dirty-only flag is set
+		if dirtyOnly && status.Error == "" && status.IsClean {
+			continue
+		}
 		results = append(results, status)
 	}
 
@@ -91,7 +101,11 @@ func main() {
 		}
 	}
 
-	fmt.Printf("\nSummary: %d clean repositories, %d repositories with uncommitted changes, %d repositories with errors\n", cleanCount, dirtyCount, errorCount)
+	if dirtyOnly {
+		fmt.Printf("\nSummary: %d repositories with uncommitted changes, %d repositories with errors\n", dirtyCount, errorCount)
+	} else {
+		fmt.Printf("\nSummary: %d clean repositories, %d repositories with uncommitted changes, %d repositories with errors\n", cleanCount, dirtyCount, errorCount)
+	}
 }
 
 func findGitRepos(rootDir string) []string {

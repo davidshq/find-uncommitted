@@ -9,6 +9,7 @@ A Go application that scans your hard drive for git repositories and reports on 
 - 📊 **Detailed reporting**: Shows branch name, unstaged changes, staged changes, untracked files, and unpushed commits
 - 🚫 **Smart filtering**: Skips system directories and common build folders to improve performance
 - 📈 **Summary statistics**: Provides a count of clean vs. dirty repositories
+- 🎯 **Dirty-only mode**: Option to show only repositories with uncommitted changes
 - 🛠️ **Ownership issue detection**: Identifies and provides guidance for Git ownership problems
 - 🔧 **Debug mode**: Optional debug output for troubleshooting
 
@@ -25,8 +26,14 @@ A Go application that scans your hard drive for git repositories and reports on 
 # Scan current directory
 ./find-uncommitted.exe .
 
+# Show only repositories with uncommitted changes
+./find-uncommitted.exe --dirty-only C:\somedirectory
+
 # Enable debug output
 ./find-uncommitted.exe --debug C:\somedirectory
+
+# Combine flags
+./find-uncommitted.exe --dirty-only --debug C:\somedirectory
 ```
 
 ### Linux/macOS
@@ -40,8 +47,14 @@ A Go application that scans your hard drive for git repositories and reports on 
 # Scan current directory
 ./find-uncommitted .
 
+# Show only repositories with uncommitted changes
+./find-uncommitted --dirty-only /home/username/projects
+
 # Enable debug output
 ./find-uncommitted --debug /home/username/projects
+
+# Combine flags
+./find-uncommitted --dirty-only --debug /home/username/projects
 ```
 
 ## Output Example
@@ -73,6 +86,23 @@ The output shows:
   - `staged`: Files staged for commit
   - `untracked`: New files not tracked by git
   - `unpushed`: Commits that haven't been pushed to remote
+
+## Dirty-Only Mode
+
+Use the `--dirty-only` flag to show only repositories that have uncommitted changes:
+
+```bash
+./find-uncommitted --dirty-only /home/username/projects
+```
+
+This will filter out all clean repositories and show only those with:
+- Unstaged changes
+- Staged changes  
+- Untracked files
+- Unpushed commits
+- Git errors
+
+This is particularly useful when you want to quickly identify which repositories need attention without scrolling through a long list of clean repositories.
 
 ## Git Ownership Issues
 
@@ -163,8 +193,9 @@ cd ..
    - Untracked files (`git ls-files --others --exclude-standard`)
    - Unpushed commits (`git rev-list --count @{u}..HEAD`)
 4. **Concurrent Processing**: Uses goroutines to check multiple repositories simultaneously
-5. **Results Display**: Shows a formatted report with emojis and clear status indicators
-6. **Error Handling**: Provides specific guidance for common Git issues like ownership problems
+5. **Results Filtering**: Optionally filters out clean repositories when using `--dirty-only` flag
+6. **Results Display**: Shows a formatted report with emojis and clear status indicators
+7. **Error Handling**: Provides specific guidance for common Git issues like ownership problems
 
 ## Performance Notes
 
