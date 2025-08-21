@@ -10,6 +10,7 @@ A Go application that scans your hard drive for git repositories and reports on 
 - 🚫 **Smart filtering**: Skips system directories and common build folders to improve performance
 - 📈 **Summary statistics**: Provides a count of clean vs. dirty repositories
 - 🎯 **Dirty-only mode**: Option to show only repositories with uncommitted changes
+- 📄 **CSV export**: Save results to a CSV file for further analysis
 - 🛠️ **Ownership issue detection**: Identifies and provides guidance for Git ownership problems
 - 🔧 **Debug mode**: Optional debug output for troubleshooting
 
@@ -32,8 +33,11 @@ A Go application that scans your hard drive for git repositories and reports on 
 # Enable debug output
 ./find-uncommitted.exe --debug C:\somedirectory
 
+# Save results to CSV file
+./find-uncommitted.exe --output results.csv C:\somedirectory
+
 # Combine flags
-./find-uncommitted.exe --dirty-only --debug C:\somedirectory
+./find-uncommitted.exe --dirty-only --output dirty-repos.csv C:\somedirectory
 ```
 
 ### Linux/macOS
@@ -53,8 +57,11 @@ A Go application that scans your hard drive for git repositories and reports on 
 # Enable debug output
 ./find-uncommitted --debug /home/username/projects
 
+# Save results to CSV file
+./find-uncommitted --output results.csv /home/username/projects
+
 # Combine flags
-./find-uncommitted --dirty-only --debug /home/username/projects
+./find-uncommitted --dirty-only --output dirty-repos.csv /home/username/projects
 ```
 
 ## Output Example
@@ -103,6 +110,35 @@ This will filter out all clean repositories and show only those with:
 - Git errors
 
 This is particularly useful when you want to quickly identify which repositories need attention without scrolling through a long list of clean repositories.
+
+## CSV Export
+
+Use the `--output` flag to save results to a CSV file for further analysis:
+
+```bash
+./find-uncommitted --output results.csv /home/username/projects
+```
+
+The CSV file will contain the following columns:
+- **Repository**: Path to the git repository
+- **Branch**: Current branch name
+- **Status**: Clean, Dirty, or Error with details
+- **Changes**: Comma-separated list of change types (unstaged, staged, untracked, unpushed)
+
+This is useful for:
+- Importing into spreadsheet applications for analysis
+- Creating reports for team management
+- Tracking repository status over time
+- Filtering and sorting results in external tools
+
+You can combine the CSV export with other flags:
+```bash
+# Export only dirty repositories to CSV
+./find-uncommitted --dirty-only --output dirty-repos.csv /home/username/projects
+
+# Export with debug output (debug info won't appear in CSV)
+./find-uncommitted --debug --output results.csv /home/username/projects
+```
 
 ## Git Ownership Issues
 
@@ -195,7 +231,8 @@ cd ..
 4. **Concurrent Processing**: Uses goroutines to check multiple repositories simultaneously
 5. **Results Filtering**: Optionally filters out clean repositories when using `--dirty-only` flag
 6. **Results Display**: Shows a formatted report with emojis and clear status indicators
-7. **Error Handling**: Provides specific guidance for common Git issues like ownership problems
+7. **CSV Export**: Optionally saves results to a CSV file for external analysis
+8. **Error Handling**: Provides specific guidance for common Git issues like ownership problems
 
 ## Performance Notes
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/csv"
 	"flag"
 	"fmt"
 	"os"
@@ -23,18 +24,21 @@ type RepoStatus struct {
 
 var debugMode bool
 var dirtyOnly bool
+var outputFile string
 
 func main() {
 	flag.BoolVar(&debugMode, "debug", false, "Enable debug output")
 	flag.BoolVar(&dirtyOnly, "dirty-only", false, "Show only repositories with uncommitted changes")
+	flag.StringVar(&outputFile, "output", "", "Save results to CSV file (e.g., --output results.csv)")
 	flag.Parse()
 
 	args := flag.Args()
 	if len(args) < 1 {
-		fmt.Println("Usage: go run main.go [--debug] [--dirty-only] <directory_to_scan>")
+		fmt.Println("Usage: go run main.go [--debug] [--dirty-only] [--output filename.csv] <directory_to_scan>")
 		fmt.Println("Example: go run main.go C:\\")
 		fmt.Println("Example: go run main.go --debug C:\\")
 		fmt.Println("Example: go run main.go --dirty-only C:\\")
+		fmt.Println("Example: go run main.go --output results.csv C:\\")
 		os.Exit(1)
 	}
 
@@ -42,6 +46,9 @@ func main() {
 	fmt.Printf("Scanning for git repositories in: %s\n", rootDir)
 	if dirtyOnly {
 		fmt.Println("Showing only repositories with uncommitted changes...")
+	}
+	if outputFile != "" {
+		fmt.Printf("Results will be saved to: %s\n", outputFile)
 	}
 	fmt.Println("This may take a while depending on the size of your drive...")
 	fmt.Println()
@@ -86,6 +93,16 @@ func main() {
 
 	// Display results in tabular format
 	displayRepoStatusTable(results)
+
+	// Export to CSV if requested
+	if outputFile != "" {
+		err := exportToCSV(results, outputFile)
+		if err != nil {
+			fmt.Printf("Error saving to CSV: %v\n", err)
+		} else {
+			fmt.Printf("Results saved to: %s\n", outputFile)
+		}
+	}
 
 	// Summary
 	cleanCount := 0
@@ -326,4 +343,80 @@ func displayRepoStatusTable(results []RepoStatus) {
 
 		fmt.Printf("%-50s %-20s %-10s %s\n", relPath, branch, statusText, changesText)
 	}
+}
+
+func exportToCSV(results []RepoStatus, filename string) error {
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("failed to create CSV file: %v", err)
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	// Write header
+	header := []string{"Repository", "Branch", "Status", "Changes"}
+	if err := writer.Write(header); err != nil {
+		return fmt.Errorf("failed to write header to CSV: %v", err)
+	}
+
+	// Write data rows
+	for _, status := range results {
+		// Get relative path for cleaner display
+		wd, _ := os.Getwd()
+		relPath, _ := filepath.Rel(wd, status.Path)
+		if relPath == "." {
+			relPath = status.Path
+		}
+
+		// Truncate long paths
+		if len(relPath) > 42 {
+			relPath = "..." + relPath[len(relPath)-39:]
+		}
+
+		// Truncate long branch names
+		branch := status.Branch
+		if len(branch) > 17 {
+			branch = branch[:14] + "..."
+		}
+
+		// Determine status and changes
+		var statusText string
+		if status.Error != "" {
+			statusText = "Error: " + status.Error
+		} else if status.IsClean {
+			statusText = "Clean"
+		} else {
+			statusText = "Dirty"
+		}
+
+		row := []string{
+			relPath,
+			branch,
+			statusText,
+			strings.Join(getChangesText(status), ", "),
+		}
+		if err := writer.Write(row); err != nil {
+			return fmt.Errorf("failed to write row to CSV: %v", err)
+		}
+	}
+	return nil
+}
+
+func getChangesText(status RepoStatus) []string {
+	var changes []string
+	if status.HasUnstaged {
+		changes = append(changes, "unstaged")
+	}
+	if status.HasStaged {
+		changes = append(changes, "staged")
+	}
+	if status.HasUntracked {
+		changes = append(changes, "untracked")
+	}
+	if status.HasUnpushed {
+		changes = append(changes, "unpushed")
+	}
+	return changes
 }
