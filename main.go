@@ -7,19 +7,23 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 )
 
 type RepoStatus struct {
-	Path         string
-	HasUnstaged  bool
-	HasStaged    bool
-	HasUntracked bool
-	HasUnpushed  bool
-	Branch       string
-	IsClean      bool
-	Error        string
+	Path                 string
+	HasUnstaged          bool
+	HasStaged            bool
+	HasUntracked         bool
+	HasUnpushed          bool
+	HasUntrackedUpstream bool
+	Branch               string
+	IsDirty              bool
+	IsClean              bool
+	Error                string
 }
 
 var debugMode bool
@@ -66,10 +70,18 @@ func main() {
 	var wg sync.WaitGroup
 	statusChan := make(chan RepoStatus, len(repos))
 
+	maxWorkers := runtime.NumCPU() * 4
+	if maxWorkers < 4 {
+		maxWorkers = 4
+	}
+	sem := make(chan struct{}, maxWorkers)
+
 	for _, repo := range repos {
 		wg.Add(1)
 		go func(repoPath string) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			status := checkRepoStatus(repoPath)
 			statusChan <- status
 		}(repo)
@@ -85,7 +97,7 @@ func main() {
 	var results []RepoStatus
 	for status := range statusChan {
 		// Filter out clean repositories if --dirty-only flag is set
-		if dirtyOnly && status.Error == "" && status.IsClean {
+		if dirtyOnly && status.Error == "" && !status.IsDirty {
 			continue
 		}
 		results = append(results, status)
@@ -107,21 +119,28 @@ func main() {
 	// Summary
 	cleanCount := 0
 	dirtyCount := 0
+	unpushedCount := 0
+	untrackedUpstreamCount := 0
 	errorCount := 0
 	for _, status := range results {
 		if status.Error != "" {
 			errorCount++
-		} else if status.IsClean {
-			cleanCount++
-		} else {
+		} else if status.IsDirty {
 			dirtyCount++
+		} else if status.HasUntrackedUpstream {
+			untrackedUpstreamCount++
+		} else if status.HasUnpushed {
+			unpushedCount++
+		} else {
+			cleanCount++
 		}
 	}
 
 	if dirtyOnly {
 		fmt.Printf("\nSummary: %d repositories with uncommitted changes, %d repositories with errors\n", dirtyCount, errorCount)
 	} else {
-		fmt.Printf("\nSummary: %d clean repositories, %d repositories with uncommitted changes, %d repositories with errors\n", cleanCount, dirtyCount, errorCount)
+		fmt.Printf("\nSummary: %d clean repositories, %d repositories with uncommitted changes, %d repositories with unpushed commits, %d repositories with untracked upstream, %d repositories with errors\n",
+			cleanCount, dirtyCount, unpushedCount, untrackedUpstreamCount, errorCount)
 	}
 }
 
@@ -256,34 +275,32 @@ func checkRepoStatus(repoPath string) RepoStatus {
 	}
 	status.HasUntracked = len(strings.TrimSpace(string(untracked))) > 0
 
-	// Check for unpushed commits
-	unpushed, err := exec.Command("git", "-C", repoPath, "rev-list", "--count", "@{u}..HEAD").Output()
-	if err != nil {
-		// If there's no upstream branch, check if there are any commits at all
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 128 {
-			// No upstream branch, check if we have any commits
-			commitCount, commitErr := exec.Command("git", "-C", repoPath, "rev-list", "--count", "HEAD").Output()
-			if commitErr == nil {
-				count := strings.TrimSpace(string(commitCount))
-				if count != "0" {
-					status.HasUnpushed = true
-				}
-			}
-		} else {
-			// Other error, log it but don't fail the entire check
+	// Determine upstream tracking status first.
+	_, upstreamErr := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").Output()
+	if upstreamErr != nil {
+		status.HasUntrackedUpstream = true
+	} else {
+		// Check for unpushed commits only when an upstream exists.
+		unpushed, err := exec.Command("git", "-C", repoPath, "rev-list", "--count", "@{u}..HEAD").Output()
+		if err != nil {
 			if debugMode {
 				fmt.Printf("[DEBUG] Failed to check unpushed commits in %s: %v\n", repoPath, err)
 			}
-		}
-	} else {
-		count := strings.TrimSpace(string(unpushed))
-		if count != "0" {
-			status.HasUnpushed = true
+		} else {
+			count, parseErr := strconv.Atoi(strings.TrimSpace(string(unpushed)))
+			if parseErr != nil {
+				if debugMode {
+					fmt.Printf("[DEBUG] Failed to parse unpushed count in %s: %v\n", repoPath, parseErr)
+				}
+			} else if count > 0 {
+				status.HasUnpushed = true
+			}
 		}
 	}
 
-	// Determine if repository is clean
-	status.IsClean = !status.HasUnstaged && !status.HasStaged && !status.HasUntracked && !status.HasUnpushed
+	// Dirty means working tree changes only.
+	status.IsDirty = status.HasUnstaged || status.HasStaged || status.HasUntracked
+	status.IsClean = !status.IsDirty && !status.HasUnpushed && !status.HasUntrackedUpstream
 
 	return status
 }
@@ -292,8 +309,12 @@ func displayRepoStatusTable(results []RepoStatus) {
 	// Get working directory for relative paths
 	wd, _ := os.Getwd()
 
+	const pathColWidth = 50
+	const branchColWidth = 20
+	const statusColWidth = 18
+
 	// Print table header
-	fmt.Printf("%-45s %-15s %-8s %s\n", "Repository", "Branch", "Status", "Changes")
+	fmt.Printf("%-*s %-*s %-*s %s\n", pathColWidth, "Repository", branchColWidth, "Branch", statusColWidth, "Status", "Changes")
 	fmt.Println(strings.Repeat("-", 90))
 
 	// Print each repository as a table row
@@ -314,25 +335,18 @@ func displayRepoStatusTable(results []RepoStatus) {
 		if status.Error != "" {
 			statusText = "❌ Error"
 			changesText = status.Error
-		} else if status.IsClean {
+		} else if status.IsDirty {
+			statusText = "⚠️  Dirty"
+			changesText = strings.Join(getChangesText(status), ", ")
+		} else if status.HasUntrackedUpstream {
+			statusText = "🔗 Untracked Upstream"
+			changesText = "untracked-upstream"
+		} else if status.HasUnpushed {
+			statusText = "⬆️ Unpushed"
+			changesText = "unpushed"
+		} else {
 			statusText = "✅ Clean"
 			changesText = "-"
-		} else {
-			statusText = "⚠️  Dirty"
-			var changes []string
-			if status.HasUnstaged {
-				changes = append(changes, "unstaged")
-			}
-			if status.HasStaged {
-				changes = append(changes, "staged")
-			}
-			if status.HasUntracked {
-				changes = append(changes, "untracked")
-			}
-			if status.HasUnpushed {
-				changes = append(changes, "unpushed")
-			}
-			changesText = strings.Join(changes, ", ")
 		}
 
 		// Truncate long branch names
@@ -341,7 +355,7 @@ func displayRepoStatusTable(results []RepoStatus) {
 			branch = branch[:14] + "..."
 		}
 
-		fmt.Printf("%-50s %-20s %-10s %s\n", relPath, branch, statusText, changesText)
+		fmt.Printf("%-*s %-*s %-*s %s\n", pathColWidth, relPath, branchColWidth, branch, statusColWidth, statusText, changesText)
 	}
 }
 
@@ -370,25 +384,20 @@ func exportToCSV(results []RepoStatus, filename string) error {
 			relPath = status.Path
 		}
 
-		// Truncate long paths
-		if len(relPath) > 42 {
-			relPath = "..." + relPath[len(relPath)-39:]
-		}
-
-		// Truncate long branch names
 		branch := status.Branch
-		if len(branch) > 17 {
-			branch = branch[:14] + "..."
-		}
 
 		// Determine status and changes
 		var statusText string
 		if status.Error != "" {
 			statusText = "Error: " + status.Error
-		} else if status.IsClean {
-			statusText = "Clean"
-		} else {
+		} else if status.IsDirty {
 			statusText = "Dirty"
+		} else if status.HasUntrackedUpstream {
+			statusText = "UntrackedUpstream"
+		} else if status.HasUnpushed {
+			statusText = "Unpushed"
+		} else {
+			statusText = "Clean"
 		}
 
 		row := []string{
@@ -417,6 +426,9 @@ func getChangesText(status RepoStatus) []string {
 	}
 	if status.HasUnpushed {
 		changes = append(changes, "unpushed")
+	}
+	if status.HasUntrackedUpstream {
+		changes = append(changes, "untracked-upstream")
 	}
 	return changes
 }

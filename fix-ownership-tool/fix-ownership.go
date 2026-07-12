@@ -122,7 +122,17 @@ func fixOwnership(repoPath string) bool {
 	// Convert Windows path to forward slashes for git
 	gitPath := strings.ReplaceAll(repoPath, "\\", "/")
 
+	// Avoid adding duplicate safe.directory entries.
+	existing, err := exec.Command("git", "config", "--global", "--get-all", "safe.directory").Output()
+	if err == nil {
+		for _, line := range strings.Split(strings.ReplaceAll(string(existing), "\r\n", "\n"), "\n") {
+			if strings.TrimSpace(line) == gitPath {
+				return true
+			}
+		}
+	}
+
 	cmd := exec.Command("git", "config", "--global", "--add", "safe.directory", gitPath)
-	err := cmd.Run()
+	err = cmd.Run()
 	return err == nil
 }

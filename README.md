@@ -87,12 +87,18 @@ Summary: 21 clean repositories, 3 repositories with uncommitted changes, 0 repos
 The output shows:
 - **Repository**: Path to the git repository (truncated for readability)
 - **Branch**: Current branch name (truncated if too long)
-- **Status**: ✅ Clean or ⚠️ Dirty
+- **Status**: One of:
+   - ✅ Clean
+   - ⚠️ Dirty (working tree/index changes)
+   - ⬆️ Unpushed (ahead of upstream)
+   - 🔗 Untracked Upstream (branch has no configured upstream)
+   - ❌ Error
 - **Changes**: Specific types of changes detected:
   - `unstaged`: Modified files not yet staged
   - `staged`: Files staged for commit
   - `untracked`: New files not tracked by git
   - `unpushed`: Commits that haven't been pushed to remote
+   - `untracked-upstream`: Branch has no upstream tracking configuration
 
 ## Dirty-Only Mode
 
@@ -102,11 +108,10 @@ Use the `--dirty-only` flag to show only repositories that have uncommitted chan
 ./find-uncommitted --dirty-only /home/username/projects
 ```
 
-This will filter out all clean repositories and show only those with:
+This will filter out all repositories except those with actual uncommitted working tree changes and errors. It shows repositories with:
 - Unstaged changes
 - Staged changes  
 - Untracked files
-- Unpushed commits
 - Git errors
 
 This is particularly useful when you want to quickly identify which repositories need attention without scrolling through a long list of clean repositories.
@@ -122,8 +127,8 @@ Use the `--output` flag to save results to a CSV file for further analysis:
 The CSV file will contain the following columns:
 - **Repository**: Path to the git repository
 - **Branch**: Current branch name
-- **Status**: Clean, Dirty, or Error with details
-- **Changes**: Comma-separated list of change types (unstaged, staged, untracked, unpushed)
+- **Status**: Clean, Dirty, Unpushed, UntrackedUpstream, or Error with details
+- **Changes**: Comma-separated list of change types (unstaged, staged, untracked, unpushed, untracked-upstream)
 
 This is useful for:
 - Importing into spreadsheet applications for analysis
