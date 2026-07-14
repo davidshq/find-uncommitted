@@ -9,10 +9,11 @@ A Go application that scans your hard drive for git repositories and reports on 
 - 📊 **Detailed reporting**: Shows branch name, unstaged changes, staged changes, untracked files, and unpushed commits
 - 🚫 **Smart filtering**: Skips system directories and common build folders to improve performance
 - 📈 **Summary statistics**: Provides a count of clean vs. dirty repositories
-- 🎯 **Dirty-only mode**: Option to show only repositories with uncommitted changes
+- 🎯 **Dirty-only mode**: Option to show only repositories needing attention (dirty, unpushed, untracked upstream, errors)
 - 📄 **CSV export**: Save results to a CSV file for further analysis
 - 🛠️ **Ownership issue detection**: Identifies and provides guidance for Git ownership problems
 - 🔧 **Debug mode**: Optional debug output for troubleshooting
+- 🔄 **Cross-machine sync**: Background agent publishes per-machine snapshots to a private Git state repo and the CLI shows aggregate (with stale labeling)
 
 ## Usage
 
@@ -64,6 +65,71 @@ A Go application that scans your hard drive for git repositories and reports on 
 ./find-uncommitted --dirty-only --output dirty-repos.csv /home/username/projects
 ```
 
+## Cross-machine state sync
+
+Use a **private** Git repository as a sync bus so each machine publishes its latest known uncommitted state and any machine can display an aggregate view.
+
+### How it works
+
+- Each machine writes only its own file: `machines/<machine-id>.json`
+- Background `--agent` mode pulls, scans, writes, and push/rebases on an interval (default **30s**)
+- Normal scans with `--state-repo` pull (`--ff-only`) and merge other machines’ snapshots
+- Snapshots older than `--stale-ttl` (default **5m**) are labeled **stale**
+- Unchanged status does not create commits every tick; a heartbeat commit keeps freshness without constant chatty history
+- Snapshot filenames include a short hash so sanitized machine ids cannot collide
+- Agent exits cleanly on Ctrl+C / SIGTERM
+
+### Privacy warning
+
+Snapshots can include repository **paths** and **branch names**. Keep the state repository private. Use `--redact-paths` if you want basenames only in published JSON. Agent logs intentionally avoid dumping full snapshot payloads.
+
+### Setup
+
+1. Create a **private** empty Git repo and clone it locally (example: `D:\find-uncommitted-state`).
+2. Configure non-interactive `git pull` / `git push` credentials for that clone.
+3. Start the agent (or install the scheduler):
+
+```bash
+# Run agent in the foreground (default interval 30s)
+./find-uncommitted --agent --state-repo /path/to/state-clone /path/to/scan/root
+
+# Install OS scheduler (Windows Task Scheduler at logon, or Linux systemd user service)
+./find-uncommitted --install-scheduler --state-repo /path/to/state-clone /path/to/scan/root
+
+# Remove scheduler registration
+./find-uncommitted --uninstall-scheduler
+```
+
+Linux notes:
+- Uses a systemd **user** service that keeps the long-running agent alive
+- For headless sessions: `loginctl enable-linger $USER`
+
+Windows notes:
+- Registers an **at-logon** scheduled task that starts the agent process
+- The 30s cadence is owned by the agent loop (not a 30s Task Scheduler trigger)
+
+### Aggregate CLI view
+
+```bash
+./find-uncommitted --state-repo /path/to/state-clone /path/to/scan/root
+./find-uncommitted --state-repo /path/to/state-clone --stale-ttl 5m --machine-id my-laptop /path/to/scan/root
+```
+
+Local rows are marked with `*` on the machine column. Stale machines are annotated in the table and summarized after output.
+
+Useful flags:
+
+| Flag | Meaning |
+|------|---------|
+| `--state-repo` | Local clone of the private sync Git repo |
+| `--agent` | Background publish loop |
+| `--interval` | Publish interval (default `30s`) |
+| `--stale-ttl` | Staleness threshold (default `5m`) |
+| `--machine-id` | Override hostname-based machine id |
+| `--redact-paths` | Publish basename-only paths |
+| `--no-remote` | Local scan only even if `--state-repo` is set |
+| `--install-scheduler` / `--uninstall-scheduler` | OS autostart integration |
+
 ## Output Example
 
 The tool now displays results in a clean tabular format:
@@ -102,16 +168,16 @@ The output shows:
 
 ## Dirty-Only Mode
 
-Use the `--dirty-only` flag to show only repositories that have uncommitted changes:
+Use the `--dirty-only` flag to show only repositories that need attention:
 
 ```bash
 ./find-uncommitted --dirty-only /home/username/projects
 ```
 
-This will filter out all repositories except those with actual uncommitted working tree changes and errors. It shows repositories with:
-- Unstaged changes
-- Staged changes  
-- Untracked files
+This will filter out clean repositories and keep those that need attention:
+- Unstaged / staged / untracked working-tree changes
+- Unpushed commits
+- Untracked upstream
 - Git errors
 
 This is particularly useful when you want to quickly identify which repositories need attention without scrolling through a long list of clean repositories.

@@ -23,7 +23,7 @@ A practical solution should avoid standing up a custom service and work on Windo
 
 - Use a dedicated Git state repository as the sync bus.
 - Store one JSON file per machine, named by machine ID.
-- Agent loop runs periodically (default 5 minutes) and on startup.
+- Agent loop runs periodically (default 30 seconds) and on startup.
 - Sync sequence each tick:
   1. Pull latest state repo.
   2. Scan local repositories.

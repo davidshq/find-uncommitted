@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
+	"time"
 )
 
 type RepoStatus struct {
@@ -31,25 +31,135 @@ var dirtyOnly bool
 var outputFile string
 
 func main() {
+	var (
+		stateRepo      string
+		agentMode      bool
+		intervalStr    string
+		staleTTLStr    string
+		machineID      string
+		installSched   bool
+		uninstallSched bool
+		redactPaths    bool
+		skipRemote     bool
+	)
+
 	flag.BoolVar(&debugMode, "debug", false, "Enable debug output")
-	flag.BoolVar(&dirtyOnly, "dirty-only", false, "Show only repositories with uncommitted changes")
+	flag.BoolVar(&dirtyOnly, "dirty-only", false, "Show only repositories needing attention (dirty, unpushed, untracked upstream, or errors)")
 	flag.StringVar(&outputFile, "output", "", "Save results to CSV file (e.g., --output results.csv)")
+	flag.StringVar(&stateRepo, "state-repo", "", "Local path to private Git state repository for cross-machine sync")
+	flag.BoolVar(&agentMode, "agent", false, "Run as background agent publishing machine snapshots")
+	flag.StringVar(&intervalStr, "interval", DefaultAgentInterval.String(), "Agent publish interval (default 30s)")
+	flag.StringVar(&staleTTLStr, "stale-ttl", DefaultStaleTTL.String(), "Mark machine snapshots stale after this duration")
+	flag.StringVar(&machineID, "machine-id", "", "Machine identifier (default: hostname)")
+	flag.BoolVar(&installSched, "install-scheduler", false, "Install OS scheduler to run the agent at login")
+	flag.BoolVar(&uninstallSched, "uninstall-scheduler", false, "Remove OS scheduler registration")
+	flag.BoolVar(&redactPaths, "redact-paths", false, "Redact full paths in published snapshots (keep basename)")
+	flag.BoolVar(&skipRemote, "no-remote", false, "Skip loading other machines' snapshots even if --state-repo is set")
 	flag.Parse()
 
-	args := flag.Args()
-	if len(args) < 1 {
-		fmt.Println("Usage: go run main.go [--debug] [--dirty-only] [--output filename.csv] <directory_to_scan>")
-		fmt.Println("Example: go run main.go C:\\")
-		fmt.Println("Example: go run main.go --debug C:\\")
-		fmt.Println("Example: go run main.go --dirty-only C:\\")
-		fmt.Println("Example: go run main.go --output results.csv C:\\")
+	if uninstallSched {
+		if err := uninstallScheduler(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if machineID == "" {
+		host, err := os.Hostname()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error resolving hostname for machine id: %v\n", err)
+			os.Exit(1)
+		}
+		machineID = host
+	}
+
+	interval, err := time.ParseDuration(intervalStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid --interval: %v\n", err)
+		os.Exit(1)
+	}
+	staleTTL, err := time.ParseDuration(staleTTLStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid --stale-ttl: %v\n", err)
 		os.Exit(1)
 	}
 
-	rootDir := args[0]
+	args := flag.Args()
+	needsScanRoot := agentMode || installSched || !uninstallSched
+	if needsScanRoot && len(args) < 1 && !uninstallSched {
+		printUsage()
+		os.Exit(1)
+	}
+
+	var rootDir string
+	if len(args) >= 1 {
+		rootDir = args[0]
+		if abs, err := filepath.Abs(rootDir); err == nil {
+			rootDir = abs
+		}
+	}
+	if stateRepo != "" {
+		if abs, err := filepath.Abs(stateRepo); err == nil {
+			stateRepo = abs
+		}
+	}
+
+	if installSched {
+		if stateRepo == "" {
+			fmt.Fprintln(os.Stderr, "Error: --install-scheduler requires --state-repo")
+			os.Exit(1)
+		}
+		if err := validateStateRepo(stateRepo); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		exe, err := resolveExecutable()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error resolving executable: %v\n", err)
+			os.Exit(1)
+		}
+		printSchedulerPrereqs()
+		if err := installScheduler(exe, rootDir, stateRepo, machineID, interval, redactPaths); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if agentMode {
+		if stateRepo == "" {
+			fmt.Fprintln(os.Stderr, "Error: --agent requires --state-repo")
+			os.Exit(1)
+		}
+		if err := validateStateRepo(stateRepo); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		printPrivacyNotice()
+		err := RunAgentLoop(AgentConfig{
+			ScanRoot:     rootDir,
+			StateRepoDir: stateRepo,
+			MachineID:    machineID,
+			Interval:     interval,
+			RedactPaths:  redactPaths,
+			DirtyOnly:    false, // agent always publishes full status set
+			Sync: SyncConfig{
+				StateRepoDir: stateRepo,
+				MachineID:    machineID,
+			},
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Agent error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Normal scan mode
 	fmt.Printf("Scanning for git repositories in: %s\n", rootDir)
 	if dirtyOnly {
-		fmt.Println("Showing only repositories with uncommitted changes...")
+		fmt.Println("Showing only repositories needing attention (dirty, unpushed, untracked upstream, or errors)...")
 	}
 	if outputFile != "" {
 		fmt.Printf("Results will be saved to: %s\n", outputFile)
@@ -57,58 +167,55 @@ func main() {
 	fmt.Println("This may take a while depending on the size of your drive...")
 	fmt.Println()
 
-	repos := findGitRepos(rootDir)
-
+	repos := findGitRepos(rootDir, stateRepo)
 	if len(repos) == 0 {
 		fmt.Println("No git repositories found.")
+	} else {
+		fmt.Printf("Found %d git repositories:\n\n", len(repos))
+	}
+
+	results := checkRepoStatuses(repos, dirtyOnly)
+
+	var remote []LoadedSnapshot
+	remoteOK := false
+	if stateRepo != "" && !skipRemote {
+		if err := validateStateRepo(stateRepo); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		} else {
+			if err := PullStateRepoReadOnly(SyncConfig{StateRepoDir: stateRepo, MachineID: machineID}); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+			}
+			remote, err = LoadAllMachineSnapshots(stateRepo, staleTTL, time.Now().UTC())
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed loading remote snapshots: %v\n", err)
+			} else {
+				remoteOK = true
+			}
+		}
+	}
+
+	if len(results) == 0 && len(remote) == 0 {
 		return
 	}
 
-	fmt.Printf("Found %d git repositories:\n\n", len(repos))
-
-	// Check status of each repository concurrently
-	var wg sync.WaitGroup
-	statusChan := make(chan RepoStatus, len(repos))
-
-	maxWorkers := runtime.NumCPU() * 4
-	if maxWorkers < 4 {
-		maxWorkers = 4
-	}
-	sem := make(chan struct{}, maxWorkers)
-
-	for _, repo := range repos {
-		wg.Add(1)
-		go func(repoPath string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			status := checkRepoStatus(repoPath)
-			statusChan <- status
-		}(repo)
+	// Aggregate UI only when the state repo is usable (validated + loaded).
+	useAggregate := remoteOK
+	var rows []AggregateRow
+	if useAggregate {
+		rows = BuildAggregateRows(machineID, results, remote)
+		displayAggregateTable(rows, dirtyOnly)
+		printStaleMachineSummary(remote, staleTTL)
+	} else {
+		displayRepoStatusTable(results)
 	}
 
-	// Close channel when all goroutines complete
-	go func() {
-		wg.Wait()
-		close(statusChan)
-	}()
-
-	// Collect and display results
-	var results []RepoStatus
-	for status := range statusChan {
-		// Filter out clean repositories if --dirty-only flag is set
-		if dirtyOnly && status.Error == "" && !status.IsDirty {
-			continue
-		}
-		results = append(results, status)
-	}
-
-	// Display results in tabular format
-	displayRepoStatusTable(results)
-
-	// Export to CSV if requested
 	if outputFile != "" {
-		err := exportToCSV(results, outputFile)
+		var err error
+		if useAggregate {
+			err = exportAggregateToCSV(rows, outputFile, dirtyOnly)
+		} else {
+			err = exportToCSV(results, outputFile)
+		}
 		if err != nil {
 			fmt.Printf("Error saving to CSV: %v\n", err)
 		} else {
@@ -116,7 +223,60 @@ func main() {
 		}
 	}
 
-	// Summary
+	if useAggregate {
+		printAggregateSummary(rows, dirtyOnly)
+	} else {
+		printSummary(results)
+	}
+}
+
+func printUsage() {
+	fmt.Println("Usage: find-uncommitted [flags] <directory_to_scan>")
+	fmt.Println()
+	fmt.Println("Examples:")
+	fmt.Println("  find-uncommitted C:\\code")
+	fmt.Println("  find-uncommitted --dirty-only --output results.csv C:\\code")
+	fmt.Println("  find-uncommitted --state-repo D:\\state-repo C:\\code")
+	fmt.Println("  find-uncommitted --agent --state-repo D:\\state-repo --interval 30s C:\\code")
+	fmt.Println("  find-uncommitted --install-scheduler --state-repo D:\\state-repo C:\\code")
+	fmt.Println()
+	fmt.Println("Cross-machine sync requires a private Git repository. See README for privacy notes.")
+}
+
+func printPrivacyNotice() {
+	fmt.Println("Privacy: snapshots may include repository paths and branch names.")
+	fmt.Println("Use a private state repository. Consider --redact-paths to limit path detail.")
+}
+
+func printSchedulerPrereqs() {
+	fmt.Println("Scheduler prerequisites:")
+	fmt.Println("  - Built binary available (not `go run`)")
+	fmt.Println("  - Private Git state repo cloned locally and accessible offline-tolerant")
+	fmt.Println("  - Git credentials configured for non-interactive pull/push")
+	if runtime.GOOS == "linux" {
+		fmt.Println("  - systemd user session; enable lingering for headless: loginctl enable-linger $USER")
+	}
+	if runtime.GOOS == "windows" {
+		fmt.Println("  - Permission to create scheduled tasks for the current user")
+	}
+}
+
+func validateStateRepo(dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("state repo path %q: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("state repo path %q is not a directory", dir)
+	}
+	gitDir := filepath.Join(dir, ".git")
+	if _, err := os.Stat(gitDir); err != nil {
+		return fmt.Errorf("state repo %q does not look like a git repository (missing .git)", dir)
+	}
+	return nil
+}
+
+func printSummary(results []RepoStatus) {
 	cleanCount := 0
 	dirtyCount := 0
 	unpushedCount := 0
@@ -137,15 +297,27 @@ func main() {
 	}
 
 	if dirtyOnly {
-		fmt.Printf("\nSummary: %d repositories with uncommitted changes, %d repositories with errors\n", dirtyCount, errorCount)
+		attention := dirtyCount + unpushedCount + untrackedUpstreamCount
+		fmt.Printf("\nSummary: %d repositories needing attention, %d repositories with errors\n", attention, errorCount)
 	} else {
 		fmt.Printf("\nSummary: %d clean repositories, %d repositories with uncommitted changes, %d repositories with unpushed commits, %d repositories with untracked upstream, %d repositories with errors\n",
 			cleanCount, dirtyCount, unpushedCount, untrackedUpstreamCount, errorCount)
 	}
 }
 
-func findGitRepos(rootDir string) []string {
+func findGitRepos(rootDir string, excludeRepos ...string) []string {
 	var repos []string
+	excludes := make([]string, 0, len(excludeRepos))
+	for _, e := range excludeRepos {
+		if e == "" {
+			continue
+		}
+		abs, err := filepath.Abs(e)
+		if err != nil {
+			abs = filepath.Clean(e)
+		}
+		excludes = append(excludes, abs)
+	}
 
 	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -166,6 +338,12 @@ func findGitRepos(rootDir string) []string {
 					fmt.Printf("[DEBUG] Found .git directory: %s\n", path)
 				}
 				repoPath := filepath.Dir(path)
+				if shouldExcludeRepo(repoPath, excludes) {
+					if debugMode {
+						fmt.Printf("[DEBUG] Excluding state/sync repo: %s\n", repoPath)
+					}
+					return filepath.SkipDir
+				}
 				repos = append(repos, repoPath)
 				return filepath.SkipDir
 			}
@@ -195,6 +373,19 @@ func findGitRepos(rootDir string) []string {
 	}
 
 	return repos
+}
+
+func shouldExcludeRepo(repoPath string, excludes []string) bool {
+	abs, err := filepath.Abs(repoPath)
+	if err != nil {
+		abs = filepath.Clean(repoPath)
+	}
+	for _, ex := range excludes {
+		if abs == ex {
+			return true
+		}
+	}
+	return false
 }
 
 func checkRepoStatus(repoPath string) RepoStatus {
@@ -278,7 +469,16 @@ func checkRepoStatus(repoPath string) RepoStatus {
 	// Determine upstream tracking status first.
 	_, upstreamErr := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").Output()
 	if upstreamErr != nil {
-		status.HasUntrackedUpstream = true
+		if exitErr, ok := upstreamErr.(*exec.ExitError); ok {
+			errOutput := strings.ToLower(string(exitErr.Stderr))
+			if strings.Contains(errOutput, "no upstream configured") {
+				status.HasUntrackedUpstream = true
+			} else {
+				status.Error = fmt.Sprintf("Failed to check upstream tracking: %v", upstreamErr)
+			}
+		} else {
+			status.Error = fmt.Sprintf("Failed to check upstream tracking: %v", upstreamErr)
+		}
 	} else {
 		// Check for unpushed commits only when an upstream exists.
 		unpushed, err := exec.Command("git", "-C", repoPath, "rev-list", "--count", "@{u}..HEAD").Output()
@@ -369,15 +569,12 @@ func exportToCSV(results []RepoStatus, filename string) error {
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	// Write header
 	header := []string{"Repository", "Branch", "Status", "Changes"}
 	if err := writer.Write(header); err != nil {
 		return fmt.Errorf("failed to write header to CSV: %v", err)
 	}
 
-	// Write data rows
 	for _, status := range results {
-		// Get relative path for cleaner display
 		wd, _ := os.Getwd()
 		relPath, _ := filepath.Rel(wd, status.Path)
 		if relPath == "." {
@@ -386,7 +583,6 @@ func exportToCSV(results []RepoStatus, filename string) error {
 
 		branch := status.Branch
 
-		// Determine status and changes
 		var statusText string
 		if status.Error != "" {
 			statusText = "Error: " + status.Error
