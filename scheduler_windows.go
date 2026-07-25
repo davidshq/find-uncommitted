@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 const schedulerTaskName = "FindUncommittedAgent"
@@ -27,25 +26,14 @@ func agentLauncherPath() (string, error) {
 
 // installScheduler writes a .cmd launcher (avoids schtasks arg quoting issues)
 // and registers an at-logon task that runs it.
-func installScheduler(exePath string, scanRoot, stateRepo, machineID string, interval time.Duration, redactPaths bool) error {
+// Scan root, state_repo, interval, and related settings come from sticky config.
+func installScheduler(exePath string) error {
 	launcher, err := agentLauncherPath()
 	if err != nil {
 		return fmt.Errorf("resolve launcher path: %w", err)
 	}
 
-	args := []string{
-		quoteCmdArg(exePath),
-		"--agent",
-		"--state-repo", quoteCmdArg(stateRepo),
-		"--machine-id", quoteCmdArg(machineID),
-		"--interval", quoteCmdArg(interval.String()),
-	}
-	if redactPaths {
-		args = append(args, "--redact-paths")
-	}
-	args = append(args, quoteCmdArg(scanRoot))
-
-	content := "@echo off\r\n" + strings.Join(args, " ") + "\r\n"
+	content := "@echo off\r\n" + quoteCmdArg(exePath) + " --agent\r\n"
 	if err := os.WriteFile(launcher, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("write launcher: %w", err)
 	}
@@ -57,7 +45,7 @@ func installScheduler(exePath string, scanRoot, stateRepo, machineID string, int
 	}
 	fmt.Printf("Installed Windows scheduled task %q (starts agent at logon).\n", schedulerTaskName)
 	fmt.Printf("Launcher: %s\n", launcher)
-	fmt.Printf("Agent interval once running: %s\n", interval)
+	fmt.Println("Agent settings (scan_root, interval, state_repo, …) come from sticky config.")
 	return nil
 }
 

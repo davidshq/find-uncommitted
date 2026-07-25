@@ -5,10 +5,9 @@ package main
 import (
 	"fmt"
 	"runtime"
-	"time"
 )
 
-func installScheduler(exePath string, scanRoot, stateRepo, machineID string, interval time.Duration, redactPaths bool) error {
+func installScheduler(_ string) error {
 	return fmt.Errorf("scheduler install is not supported on %s (Windows and Linux only in this release)", runtime.GOOS)
 }
 

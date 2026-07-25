@@ -48,13 +48,13 @@ func main() {
 	flag.StringVar(&outputFile, "output", "", "Save results to CSV file (e.g., --output results.csv)")
 	flag.StringVar(&stateRepo, "state-repo", "", "Local path to private Git state repository for cross-machine sync")
 	flag.BoolVar(&agentMode, "agent", false, "Run as background agent publishing machine snapshots")
-	flag.StringVar(&intervalStr, "interval", DefaultAgentInterval.String(), "Agent publish interval (default 30s)")
-	flag.StringVar(&staleTTLStr, "stale-ttl", DefaultStaleTTL.String(), "Mark machine snapshots stale after this duration")
+	flag.StringVar(&intervalStr, "interval", "30s", "Agent publish interval (default 30s)")
+	flag.StringVar(&staleTTLStr, "stale-ttl", "5m", "Mark machine snapshots stale after this duration")
 	flag.StringVar(&machineID, "machine-id", "", "Machine identifier (default: hostname)")
 	flag.BoolVar(&installSched, "install-scheduler", false, "Install OS scheduler to run the agent at login")
 	flag.BoolVar(&uninstallSched, "uninstall-scheduler", false, "Remove OS scheduler registration")
 	flag.BoolVar(&redactPaths, "redact-paths", false, "Redact full paths in published snapshots (keep basename)")
-	flag.BoolVar(&skipRemote, "no-remote", false, "Skip loading other machines' snapshots even if --state-repo is set")
+	flag.BoolVar(&skipRemote, "no-remote", false, "Skip loading other machines' snapshots even if state repo is configured")
 	flag.Parse()
 
 	if uninstallSched {
@@ -64,6 +64,53 @@ func main() {
 		}
 		return
 	}
+
+	flagSet := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) {
+		flagSet[f.Name] = true
+	})
+
+	args := flag.Args()
+	var rootDirArg string
+	if len(args) >= 1 {
+		rootDirArg = args[0]
+	}
+
+	configPath, err := DefaultConfigPath()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not resolve config path: %v\n", err)
+		configPath = ""
+	}
+	fileCfg, err := LoadUserConfig(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		fileCfg = UserConfig{}
+	}
+
+	resolved := ResolveSettings(FlagOverrides{
+		StateRepo:      stateRepo,
+		StateRepoSet:   flagSet["state-repo"],
+		ScanRoot:       rootDirArg,
+		ScanRootSet:    rootDirArg != "",
+		MachineID:      machineID,
+		MachineIDSet:   flagSet["machine-id"],
+		Interval:       intervalStr,
+		IntervalSet:    flagSet["interval"],
+		StaleTTL:       staleTTLStr,
+		StaleTTLSet:    flagSet["stale-ttl"],
+		RedactPaths:    redactPaths,
+		RedactPathsSet: flagSet["redact-paths"],
+	}, fileCfg, os.Getenv)
+
+	stateRepo = resolved.StateRepo
+	machineID = resolved.MachineID
+	if resolved.Interval != "" {
+		intervalStr = resolved.Interval
+	}
+	if resolved.StaleTTL != "" {
+		staleTTLStr = resolved.StaleTTL
+	}
+	redactPaths = resolved.RedactPaths
 
 	if machineID == "" {
 		host, err := os.Hostname()
@@ -85,19 +132,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	args := flag.Args()
-	needsScanRoot := agentMode || installSched || !uninstallSched
-	if needsScanRoot && len(args) < 1 && !uninstallSched {
-		printUsage()
-		os.Exit(1)
-	}
-
 	var rootDir string
-	if len(args) >= 1 {
-		rootDir = args[0]
+	if resolved.ScanRoot != "" {
+		rootDir = resolved.ScanRoot
 		if abs, err := filepath.Abs(rootDir); err == nil {
 			rootDir = abs
 		}
+	}
+	if rootDir == "" {
+		printUsage()
+		os.Exit(1)
 	}
 	if stateRepo != "" {
 		if abs, err := filepath.Abs(stateRepo); err == nil {
@@ -107,12 +151,30 @@ func main() {
 
 	if installSched {
 		if stateRepo == "" {
-			fmt.Fprintln(os.Stderr, "Error: --install-scheduler requires --state-repo")
+			fmt.Fprintln(os.Stderr, "Error: --install-scheduler requires --state-repo (or sticky config / FIND_UNCOMMITTED_STATE_REPO)")
 			os.Exit(1)
 		}
 		if err := validateStateRepo(stateRepo); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
+		}
+		if configPath != "" {
+			sticky := UserConfig{
+				StateRepo:   stateRepo,
+				ScanRoot:    rootDir,
+				Interval:    intervalStr,
+				StaleTTL:    staleTTLStr,
+				RedactPaths: redactPaths,
+			}
+			// Only persist machine_id when explicitly set; blank means hostname at runtime.
+			if flagSet["machine-id"] {
+				sticky.MachineID = machineID
+			}
+			if err := SaveUserConfig(configPath, sticky); err != nil {
+				fmt.Fprintf(os.Stderr, "Error writing sticky config: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Wrote sticky config: %s\n", configPath)
 		}
 		exe, err := resolveExecutable()
 		if err != nil {
@@ -120,21 +182,31 @@ func main() {
 			os.Exit(1)
 		}
 		printSchedulerPrereqs()
-		if err := installScheduler(exe, rootDir, stateRepo, machineID, interval, redactPaths); err != nil {
+		if err := installScheduler(exe); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+		fmt.Println("Migration: existing unit-only installs should re-run --install-scheduler once so sticky config is created.")
 		return
 	}
 
 	if agentMode {
 		if stateRepo == "" {
-			fmt.Fprintln(os.Stderr, "Error: --agent requires --state-repo")
+			fmt.Fprintln(os.Stderr, "Error: --agent requires --state-repo (or sticky config / FIND_UNCOMMITTED_STATE_REPO)")
 			os.Exit(1)
 		}
 		if err := validateStateRepo(stateRepo); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
+		}
+		if flagSet["state-repo"] && configPath != "" {
+			persistMachineID := ""
+			if flagSet["machine-id"] {
+				persistMachineID = machineID
+			}
+			if err := EnsureConfigFromAgent(configPath, stateRepo, rootDir, persistMachineID, intervalStr, staleTTLStr, redactPaths); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not write sticky config: %v\n", err)
+			}
 		}
 		printPrivacyNotice()
 		err := RunAgentLoop(AgentConfig{
@@ -179,18 +251,22 @@ func main() {
 	var remote []LoadedSnapshot
 	remoteOK := false
 	if stateRepo != "" && !skipRemote {
+		if resolved.StateRepoSource == SourceConfig {
+			fmt.Fprintf(os.Stderr, "using state repo from config (%s); pass --no-remote for local only\n", stateRepo)
+		}
+		stateRepoOK := true
 		if err := validateStateRepo(stateRepo); err != nil {
+			stateRepoOK = false
 			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
-		} else {
-			if err := PullStateRepoReadOnly(SyncConfig{StateRepoDir: stateRepo, MachineID: machineID}); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: %v\n", err)
-			}
-			remote, err = LoadAllMachineSnapshots(stateRepo, staleTTL, time.Now().UTC())
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: failed loading remote snapshots: %v\n", err)
-			} else {
-				remoteOK = true
-			}
+		} else if err := PullStateRepoReadOnly(SyncConfig{StateRepoDir: stateRepo, MachineID: machineID}); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		}
+		// Try on-disk snapshots even when pull fails; require a usable repo or loaded rows.
+		remote, err = LoadAllMachineSnapshots(stateRepo, staleTTL, time.Now().UTC())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed loading remote snapshots: %v\n", err)
+		} else if stateRepoOK || len(remote) > 0 {
+			remoteOK = true
 		}
 	}
 
@@ -198,7 +274,7 @@ func main() {
 		return
 	}
 
-	// Aggregate UI only when the state repo is usable (validated + loaded).
+	// Aggregate UI when state repo validated or at least one snapshot loaded.
 	useAggregate := remoteOK
 	var rows []AggregateRow
 	if useAggregate {
@@ -231,7 +307,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println("Usage: find-uncommitted [flags] <directory_to_scan>")
+	fmt.Println("Usage: find-uncommitted [flags] [directory_to_scan]")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  find-uncommitted C:\\code")
@@ -240,6 +316,8 @@ func printUsage() {
 	fmt.Println("  find-uncommitted --agent --state-repo D:\\state-repo --interval 30s C:\\code")
 	fmt.Println("  find-uncommitted --install-scheduler --state-repo D:\\state-repo C:\\code")
 	fmt.Println()
+	fmt.Println("After --install-scheduler, sticky config enables aggregate remotes on bare scans.")
+	fmt.Println("Scan root may come from config when the directory argument is omitted.")
 	fmt.Println("Cross-machine sync requires a private Git repository. See README for privacy notes.")
 }
 

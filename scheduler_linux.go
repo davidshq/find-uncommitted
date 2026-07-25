@@ -8,17 +8,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 const (
-	systemdUnitName  = "find-uncommitted-agent"
-	systemdService   = systemdUnitName + ".service"
+	systemdUnitName = "find-uncommitted-agent"
+	systemdService  = systemdUnitName + ".service"
 )
 
 // installScheduler writes a systemd user service that keeps the agent running.
-// Interval ticking is owned by the agent process, not a timer cadence.
-func installScheduler(exePath string, scanRoot, stateRepo, machineID string, interval time.Duration, redactPaths bool) error {
+// Scan root, state_repo, interval, and related settings come from sticky config.
+func installScheduler(exePath string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
@@ -28,21 +27,7 @@ func installScheduler(exePath string, scanRoot, stateRepo, machineID string, int
 		return fmt.Errorf("create systemd user unit dir: %w", err)
 	}
 
-	args := []string{
-		"--agent",
-		"--state-repo", stateRepo,
-		"--machine-id", machineID,
-		"--interval", interval.String(),
-	}
-	if redactPaths {
-		args = append(args, "--redact-paths")
-	}
-	args = append(args, scanRoot)
-
-	execStart := quoteSystemd(exePath)
-	for _, a := range args {
-		execStart += " " + quoteSystemd(a)
-	}
+	execStart := quoteSystemd(exePath) + " --agent"
 
 	content := fmt.Sprintf(`[Unit]
 Description=Find Uncommitted cross-machine state agent
@@ -71,7 +56,7 @@ WantedBy=default.target
 	}
 
 	fmt.Printf("Installed and started systemd user service %q.\n", systemdService)
-	fmt.Printf("Agent interval once running: %s\n", interval)
+	fmt.Println("Agent settings (scan_root, interval, state_repo, …) come from sticky config.")
 	fmt.Println("Ensure lingering is enabled if the agent should run without an active login: loginctl enable-linger $USER")
 	return nil
 }

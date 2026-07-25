@@ -73,11 +73,39 @@ Use a **private** Git repository as a sync bus so each machine publishes its lat
 
 - Each machine writes only its own file: `machines/<machine-id>.json`
 - Background `--agent` mode pulls, scans, writes, and push/rebases on an interval (default **30s**)
-- Normal scans with `--state-repo` pull (`--ff-only`) and merge other machines’ snapshots
+- Interactive scans load remotes when a state repo is resolved from `--state-repo`, `FIND_UNCOMMITTED_STATE_REPO`, or sticky TOML config (unless `--no-remote`)
 - Snapshots older than `--stale-ttl` (default **5m**) are labeled **stale**
 - Unchanged status does not create commits every tick; a heartbeat commit keeps freshness without constant chatty history
 - Snapshot filenames include a short hash so sanitized machine ids cannot collide
 - Agent exits cleanly on Ctrl+C / SIGTERM
+
+### Sticky config (recommended)
+
+After `--install-scheduler`, settings are written to a user-scoped TOML file so bare scans include remotes without retyping `--state-repo`:
+
+| Platform | Path |
+|----------|------|
+| Linux/macOS | `$XDG_CONFIG_HOME/find-uncommitted/config.toml` (usually `~/.config/find-uncommitted/config.toml`) |
+| Windows | `%AppData%\find-uncommitted\config.toml` |
+
+Example:
+
+```toml
+state_repo = "/path/to/uncommitted-state"
+scan_root = "/path/to/repos"
+machine_id = ""
+interval = "30s"
+stale_ttl = "5m"
+redact_paths = false
+```
+
+**Precedence:** CLI flags > environment variables > config file > built-in defaults.
+
+Useful env vars: `FIND_UNCOMMITTED_STATE_REPO`, `FIND_UNCOMMITTED_SCAN_ROOT`, `FIND_UNCOMMITTED_MACHINE_ID`, `FIND_UNCOMMITTED_INTERVAL`, `FIND_UNCOMMITTED_STALE_TTL`, `FIND_UNCOMMITTED_REDACT_PATHS`.
+
+When config supplies `state_repo`, the CLI prints a short stderr notice and aggregates remotes. Use `--no-remote` for a local-only scan. If the state clone is missing or offline, the tool warns and still shows local results (plus any on-disk snapshots).
+
+**Migration:** If you installed the scheduler before sticky config existed, re-run `--install-scheduler` once (or create the TOML file manually). Until then, interactive scans stay local-only unless you pass `--state-repo`.
 
 ### Privacy warning
 
@@ -93,8 +121,15 @@ Snapshots can include repository **paths** and **branch names**. Keep the state 
 # Run agent in the foreground (default interval 30s)
 ./find-uncommitted --agent --state-repo /path/to/state-clone /path/to/scan/root
 
-# Install OS scheduler (Windows Task Scheduler at logon, or Linux systemd user service)
+# Install OS scheduler (writes sticky config + Windows Task Scheduler / Linux systemd user service)
 ./find-uncommitted --install-scheduler --state-repo /path/to/state-clone /path/to/scan/root
+
+# After install, bare scans use sticky config (aggregate remotes by default)
+./find-uncommitted /path/to/scan/root
+./find-uncommitted   # uses scan_root from config when set
+
+# Local-only even with sticky config
+./find-uncommitted --no-remote /path/to/scan/root
 
 # Remove scheduler registration
 ./find-uncommitted --uninstall-scheduler
@@ -102,6 +137,7 @@ Snapshots can include repository **paths** and **branch names**. Keep the state 
 
 Linux notes:
 - Uses a systemd **user** service that keeps the long-running agent alive
+- The unit launches `--agent` only; `scan_root`, `state_repo`, `interval`, and related settings come from sticky config
 - For headless sessions: `loginctl enable-linger $USER`
 
 Windows notes:
@@ -111,8 +147,12 @@ Windows notes:
 ### Aggregate CLI view
 
 ```bash
+# Explicit state repo (also works without sticky config)
 ./find-uncommitted --state-repo /path/to/state-clone /path/to/scan/root
 ./find-uncommitted --state-repo /path/to/state-clone --stale-ttl 5m --machine-id my-laptop /path/to/scan/root
+
+# With sticky config already installed
+./find-uncommitted /path/to/scan/root
 ```
 
 Local rows are marked with `*` on the machine column. Stale machines are annotated in the table and summarized after output.
@@ -127,8 +167,8 @@ Useful flags:
 | `--stale-ttl` | Staleness threshold (default `5m`) |
 | `--machine-id` | Override hostname-based machine id |
 | `--redact-paths` | Publish basename-only paths |
-| `--no-remote` | Local scan only even if `--state-repo` is set |
-| `--install-scheduler` / `--uninstall-scheduler` | OS autostart integration |
+| `--no-remote` | Local scan only even if a state repo is configured |
+| `--install-scheduler` / `--uninstall-scheduler` | OS autostart integration (also writes sticky config on install) |
 
 ## Output Example
 

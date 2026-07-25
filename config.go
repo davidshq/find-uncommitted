@@ -1,0 +1,205 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/BurntSushi/toml"
+)
+
+const (
+	configAppDirName = "find-uncommitted"
+	configFileName   = "config.toml"
+
+	envStateRepo   = "FIND_UNCOMMITTED_STATE_REPO"
+	envScanRoot    = "FIND_UNCOMMITTED_SCAN_ROOT"
+	envMachineID   = "FIND_UNCOMMITTED_MACHINE_ID"
+	envInterval    = "FIND_UNCOMMITTED_INTERVAL"
+	envStaleTTL    = "FIND_UNCOMMITTED_STALE_TTL"
+	envRedactPaths = "FIND_UNCOMMITTED_REDACT_PATHS"
+)
+
+// UserConfig is the sticky TOML settings shared by CLI and agent.
+type UserConfig struct {
+	StateRepo   string `toml:"state_repo"`
+	ScanRoot    string `toml:"scan_root,omitempty"`
+	MachineID   string `toml:"machine_id,omitempty"`
+	Interval    string `toml:"interval,omitempty"`
+	StaleTTL    string `toml:"stale_ttl,omitempty"`
+	RedactPaths bool   `toml:"redact_paths,omitempty"`
+}
+
+// ConfigSource identifies where a resolved value came from.
+type ConfigSource string
+
+const (
+	SourceNone   ConfigSource = ""
+	SourceFlag   ConfigSource = "flag"
+	SourceEnv    ConfigSource = "env"
+	SourceConfig ConfigSource = "config"
+)
+
+// FlagOverrides captures CLI values and whether each flag was explicitly set.
+type FlagOverrides struct {
+	StateRepo      string
+	StateRepoSet   bool
+	ScanRoot       string
+	ScanRootSet    bool
+	MachineID      string
+	MachineIDSet   bool
+	Interval       string
+	IntervalSet    bool
+	StaleTTL       string
+	StaleTTLSet    bool
+	RedactPaths    bool
+	RedactPathsSet bool
+}
+
+// ResolvedSettings is the effective configuration after precedence resolution.
+type ResolvedSettings struct {
+	StateRepo         string
+	StateRepoSource   ConfigSource
+	ScanRoot          string
+	ScanRootSource    ConfigSource
+	MachineID         string
+	MachineIDSource   ConfigSource
+	Interval          string
+	IntervalSource    ConfigSource
+	StaleTTL          string
+	StaleTTLSource    ConfigSource
+	RedactPaths       bool
+	RedactPathsSource ConfigSource
+}
+
+// DefaultConfigPath returns the platform user config file path.
+// Unix: $XDG_CONFIG_HOME/find-uncommitted/config.toml (via os.UserConfigDir).
+// Windows: %AppData%\find-uncommitted\config.toml.
+func DefaultConfigPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user config dir: %w", err)
+	}
+	return filepath.Join(dir, configAppDirName, configFileName), nil
+}
+
+// LoadUserConfig reads the TOML config. Missing file returns an empty config and nil error.
+func LoadUserConfig(path string) (UserConfig, error) {
+	var cfg UserConfig
+	if path == "" {
+		return cfg, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return cfg, nil
+		}
+		return cfg, fmt.Errorf("read config %q: %w", path, err)
+	}
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return cfg, fmt.Errorf("parse config %q: %w", path, err)
+	}
+	return cfg, nil
+}
+
+// SaveUserConfig writes the TOML config, creating parent directories as needed.
+func SaveUserConfig(path string, cfg UserConfig) error {
+	if path == "" {
+		return fmt.Errorf("config path is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create config %q: %w", path, err)
+	}
+	defer f.Close()
+	enc := toml.NewEncoder(f)
+	if err := enc.Encode(cfg); err != nil {
+		return fmt.Errorf("encode config %q: %w", path, err)
+	}
+	return nil
+}
+
+// ConfigFileExists reports whether path exists as a regular file.
+func ConfigFileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+// ResolveSettings applies precedence: flags > env > config file > defaults (empty).
+func ResolveSettings(flags FlagOverrides, file UserConfig, getenv func(string) string) ResolvedSettings {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	var out ResolvedSettings
+
+	out.StateRepo, out.StateRepoSource = resolveString(flags.StateRepo, flags.StateRepoSet, getenv(envStateRepo), file.StateRepo)
+	out.ScanRoot, out.ScanRootSource = resolveString(flags.ScanRoot, flags.ScanRootSet, getenv(envScanRoot), file.ScanRoot)
+	out.MachineID, out.MachineIDSource = resolveString(flags.MachineID, flags.MachineIDSet, getenv(envMachineID), file.MachineID)
+	out.Interval, out.IntervalSource = resolveString(flags.Interval, flags.IntervalSet, getenv(envInterval), file.Interval)
+	out.StaleTTL, out.StaleTTLSource = resolveString(flags.StaleTTL, flags.StaleTTLSet, getenv(envStaleTTL), file.StaleTTL)
+
+	if flags.RedactPathsSet {
+		out.RedactPaths = flags.RedactPaths
+		out.RedactPathsSource = SourceFlag
+	} else if v, ok := parseBoolEnv(getenv(envRedactPaths)); ok {
+		out.RedactPaths = v
+		out.RedactPathsSource = SourceEnv
+	} else if file.RedactPaths {
+		out.RedactPaths = true
+		out.RedactPathsSource = SourceConfig
+	}
+
+	return out
+}
+
+func resolveString(flagVal string, flagSet bool, envVal, fileVal string) (string, ConfigSource) {
+	if flagSet && strings.TrimSpace(flagVal) != "" {
+		return flagVal, SourceFlag
+	}
+	if flagSet && strings.TrimSpace(flagVal) == "" {
+		// Explicit empty flag wins over env/config (clears sticky value for this run).
+		return "", SourceFlag
+	}
+	if env := strings.TrimSpace(envVal); env != "" {
+		return env, SourceEnv
+	}
+	if file := strings.TrimSpace(fileVal); file != "" {
+		return file, SourceConfig
+	}
+	return "", SourceNone
+}
+
+func parseBoolEnv(v string) (bool, bool) {
+	v = strings.TrimSpace(strings.ToLower(v))
+	if v == "" {
+		return false, false
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, false
+	}
+	return b, true
+}
+
+// EnsureConfigFromAgent writes a sticky config if missing when agent has an explicit state repo.
+func EnsureConfigFromAgent(path string, stateRepo, scanRoot, machineID, interval, staleTTL string, redactPaths bool) error {
+	if path == "" || stateRepo == "" {
+		return nil
+	}
+	if ConfigFileExists(path) {
+		return nil
+	}
+	return SaveUserConfig(path, UserConfig{
+		StateRepo:   stateRepo,
+		ScanRoot:    scanRoot,
+		MachineID:   machineID,
+		Interval:    interval,
+		StaleTTL:    staleTTL,
+		RedactPaths: redactPaths,
+	})
+}
