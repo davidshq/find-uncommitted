@@ -50,13 +50,32 @@ When a `state_repo` is resolved from config or environment and `--no-remote` is 
 - **WHEN** the user passes `--no-remote` while a sticky `state_repo` is configured
 - **THEN** the scan remains local-only
 
-### Requirement: Transparent config use and degraded failures
-When sticky config supplies `state_repo` for an interactive scan, the system SHALL emit a brief stderr notice identifying that config was used. If the configured state repo is missing, invalid, or pull fails, the system SHALL warn and continue with local results (and any readable on-disk snapshots) without failing the local scan.
+### Requirement: Transparent config use and invalid-repo failures
+When sticky config supplies `state_repo` for an interactive scan, the system SHALL emit a brief stderr notice identifying that config was used. If the configured state repo path is missing or invalid (not a usable git clone), the system SHALL fail the interactive scan with a non-zero exit instead of silently falling back to local-only output. Transient pull failures SHALL still warn and continue with local results and any readable on-disk snapshots. Unreadable or corrupt sticky config files SHALL also fail loudly rather than ignoring the file.
 
 #### Scenario: Notice on config-backed aggregate
 - **WHEN** interactive mode uses `state_repo` from the config file
 - **THEN** stderr includes a short notice that config was used and that `--no-remote` forces local-only
 
-#### Scenario: Offline or invalid state repo
-- **WHEN** the configured state repo cannot be validated or pulled
-- **THEN** the system prints a warning and still displays local scan results
+#### Scenario: Invalid state repo from sticky config
+- **WHEN** the configured `state_repo` path cannot be validated as a git repository and `--no-remote` is unset
+- **THEN** the system prints an error and exits non-zero without presenting a local-only table as if remotes were intentionally disabled
+
+#### Scenario: Offline pull with valid state repo
+- **WHEN** a valid state repository is configured for an interactive run and `git pull` fails
+- **THEN** the system prints a warning, attempts to use on-disk snapshots if present, and still shows local scan results
+
+#### Scenario: Corrupt sticky config file
+- **WHEN** the sticky config file exists but cannot be read or parsed
+- **THEN** the system prints an error and exits non-zero
+
+### Requirement: Post-install smoke publish
+When `--install-scheduler` succeeds at writing sticky config, the system SHALL perform one publish attempt to the configured state repository and report the resulting snapshot path before (or as part of) completing install, so the operator can confirm a machine file landed. If that smoke publish fails, the system SHALL exit non-zero without treating the install as fully successful.
+
+#### Scenario: Install smoke publish succeeds
+- **WHEN** the user runs `--install-scheduler` with a valid state repo and scan root
+- **THEN** a machine snapshot file is written under `machines/` and the CLI prints its path
+
+#### Scenario: Install smoke publish fails
+- **WHEN** smoke publish cannot write or push the machine snapshot during `--install-scheduler`
+- **THEN** the system reports an error and does not claim a successful install completion

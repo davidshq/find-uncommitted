@@ -12,8 +12,11 @@ import (
 )
 
 // RepoSnapshot is the serializable form of a single repository's status.
+// Origin is the normalized remote.origin.url used to correlate the same project
+// across machines (empty when the repo has no origin remote).
 type RepoSnapshot struct {
 	Path                 string `json:"path"`
+	Origin               string `json:"origin,omitempty"`
 	Branch               string `json:"branch"`
 	HasUnstaged          bool   `json:"has_unstaged"`
 	HasStaged            bool   `json:"has_staged"`
@@ -85,13 +88,18 @@ func sanitizeMachineID(id string) string {
 }
 
 // RepoStatusToSnapshot converts a live scan result into snapshot form.
+// When redactPaths is set, filesystem paths are basename-only and origin URLs
+// are replaced with a stable hash so cross-machine correlation still works.
 func RepoStatusToSnapshot(status RepoStatus, redactPaths bool) RepoSnapshot {
 	path := status.Path
+	origin := status.Origin
 	if redactPaths {
 		path = redactPath(path)
+		origin = redactOrigin(origin)
 	}
 	return RepoSnapshot{
 		Path:                 path,
+		Origin:               origin,
 		Branch:               status.Branch,
 		HasUnstaged:          status.HasUnstaged,
 		HasStaged:            status.HasStaged,
@@ -186,7 +194,8 @@ func ReadMachineSnapshot(path string) (MachineSnapshot, error) {
 }
 
 // LoadAllMachineSnapshots reads every *.json under machines/ in the state repo.
-// Invalid files are returned as LoadedSnapshot entries with LoadErr set.
+// Invalid files are skipped for aggregate merge but returned with LoadErr set
+// so callers can warn without blanking the rest of the aggregate.
 func LoadAllMachineSnapshots(stateRepoDir string, staleTTL time.Duration, now time.Time) ([]LoadedSnapshot, error) {
 	dir := filepath.Join(stateRepoDir, machinesDirName)
 	entries, err := os.ReadDir(dir)
@@ -221,6 +230,17 @@ func LoadAllMachineSnapshots(stateRepoDir string, staleTTL time.Duration, now ti
 		loaded = append(loaded, item)
 	}
 	return loaded, nil
+}
+
+// warnCorruptSnapshots prints a stderr warning for each snapshot that failed to parse.
+// One corrupt file must not blank the aggregate; callers still load valid siblings.
+func warnCorruptSnapshots(remote []LoadedSnapshot) {
+	for _, item := range remote {
+		if item.LoadErr == "" {
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "warning: skipping corrupt snapshot %s: %s\n", item.FilePath, item.LoadErr)
+	}
 }
 
 // SnapshotContentEqual compares JSON content for change detection (ignores formatting).

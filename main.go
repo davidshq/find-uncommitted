@@ -15,6 +15,7 @@ import (
 
 type RepoStatus struct {
 	Path                 string
+	Origin               string // normalized remote.origin.url; empty if none
 	HasUnstaged          bool
 	HasStaged            bool
 	HasUntracked         bool
@@ -83,8 +84,9 @@ func main() {
 	}
 	fileCfg, err := LoadUserConfig(configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
-		fileCfg = UserConfig{}
+		// Unreadable/corrupt sticky config must not silently fall back to defaults.
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 
 	resolved := ResolveSettings(FlagOverrides{
@@ -182,6 +184,23 @@ func main() {
 			os.Exit(1)
 		}
 		printSchedulerPrereqs()
+		// Smoke publish before OS registration so a broken state repo/credentials
+		// fails install loudly (and avoids racing Linux enable --now).
+		snapPath, err := smokePublishOnce(AgentConfig{
+			ScanRoot:     rootDir,
+			StateRepoDir: stateRepo,
+			MachineID:    machineID,
+			RedactPaths:  redactPaths,
+			Sync: SyncConfig{
+				StateRepoDir: stateRepo,
+				MachineID:    machineID,
+			},
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: smoke publish failed (scheduler not installed): %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Smoke publish OK: %s\n", snapPath)
 		if err := installScheduler(exe); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -254,18 +273,22 @@ func main() {
 		if resolved.StateRepoSource == SourceConfig {
 			fmt.Fprintf(os.Stderr, "using state repo from config (%s); pass --no-remote for local only\n", stateRepo)
 		}
-		stateRepoOK := true
+		// Invalid/missing state repo is a hard error when remotes are requested.
+		// Soft-degrading to local-only trains distrust of aggregate views.
 		if err := validateStateRepo(stateRepo); err != nil {
-			stateRepoOK = false
-			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
-		} else if err := PullStateRepoReadOnly(SyncConfig{StateRepoDir: stateRepo, MachineID: machineID}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintln(os.Stderr, "Fix state_repo in sticky config / env / --state-repo, or pass --no-remote for a local-only scan.")
+			os.Exit(1)
+		}
+		if err := PullStateRepoReadOnly(SyncConfig{StateRepoDir: stateRepo, MachineID: machineID}); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 		}
-		// Try on-disk snapshots even when pull fails; require a usable repo or loaded rows.
+		// Try on-disk snapshots even when pull fails.
 		remote, err = LoadAllMachineSnapshots(stateRepo, staleTTL, time.Now().UTC())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed loading remote snapshots: %v\n", err)
-		} else if stateRepoOK || len(remote) > 0 {
+		} else {
+			warnCorruptSnapshots(remote)
 			remoteOK = true
 		}
 	}
@@ -317,6 +340,7 @@ func printUsage() {
 	fmt.Println("  find-uncommitted --install-scheduler --state-repo D:\\state-repo C:\\code")
 	fmt.Println()
 	fmt.Println("After --install-scheduler, sticky config enables aggregate remotes on bare scans.")
+	fmt.Println("Install smoke-publishes one snapshot so you can confirm the state repo works.")
 	fmt.Println("Scan root may come from config when the directory argument is omitted.")
 	fmt.Println("Cross-machine sync requires a private Git repository. See README for privacy notes.")
 }
@@ -508,6 +532,9 @@ func checkRepoStatus(repoPath string) RepoStatus {
 		status.Branch = strings.TrimSpace(string(branch))
 	}
 
+	// Capture normalized origin for cross-machine project correlation.
+	status.Origin = repoOriginURL(repoPath)
+
 	// Check for unstaged changes
 	unstaged, err := exec.Command("git", "-C", repoPath, "diff", "--name-only").Output()
 	if err != nil {
@@ -647,7 +674,7 @@ func exportToCSV(results []RepoStatus, filename string) error {
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	header := []string{"Repository", "Branch", "Status", "Changes"}
+	header := []string{"Repository", "Origin", "Branch", "Status", "Changes"}
 	if err := writer.Write(header); err != nil {
 		return fmt.Errorf("failed to write header to CSV: %v", err)
 	}
@@ -676,6 +703,7 @@ func exportToCSV(results []RepoStatus, filename string) error {
 
 		row := []string{
 			relPath,
+			status.Origin,
 			branch,
 			statusText,
 			strings.Join(getChangesText(status), ", "),

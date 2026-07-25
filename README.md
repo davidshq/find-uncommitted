@@ -71,12 +71,13 @@ Use a **private** Git repository as a sync bus so each machine publishes its lat
 
 ### How it works
 
-- Each machine writes only its own file: `machines/<machine-id>.json`
+- Each machine writes only its own file: `machines/<sanitized>-<hash>.json` (short hash of the raw machine id avoids collisions after path-unsafe characters are sanitized)
+- Each repo entry includes a normalized **`origin`** URL (when configured) so the same project can be correlated across machines even when local paths differ; SSH and HTTPS remotes canonicalize to the same key
+- Aggregate rows sort by that identity (origin, or path basename for local-only repos) so copies of one project land together
 - Background `--agent` mode pulls, scans, writes, and push/rebases on an interval (default **30s**)
 - Interactive scans load remotes when a state repo is resolved from `--state-repo`, `FIND_UNCOMMITTED_STATE_REPO`, or sticky TOML config (unless `--no-remote`)
 - Snapshots older than `--stale-ttl` (default **5m**) are labeled **stale**
 - Unchanged status does not create commits every tick; a heartbeat commit keeps freshness without constant chatty history
-- Snapshot filenames include a short hash so sanitized machine ids cannot collide
 - Agent exits cleanly on Ctrl+C / SIGTERM
 
 ### Sticky config (recommended)
@@ -103,13 +104,15 @@ redact_paths = false
 
 Useful env vars: `FIND_UNCOMMITTED_STATE_REPO`, `FIND_UNCOMMITTED_SCAN_ROOT`, `FIND_UNCOMMITTED_MACHINE_ID`, `FIND_UNCOMMITTED_INTERVAL`, `FIND_UNCOMMITTED_STALE_TTL`, `FIND_UNCOMMITTED_REDACT_PATHS`.
 
-When config supplies `state_repo`, the CLI prints a short stderr notice and aggregates remotes. Use `--no-remote` for a local-only scan. If the state clone is missing or offline, the tool warns and still shows local results (plus any on-disk snapshots).
+When config supplies `state_repo`, the CLI prints a short stderr notice and aggregates remotes. Use `--no-remote` for a local-only scan. If the configured state clone path is missing or invalid, the scan **exits with an error** (so a bad sticky config cannot silently look like a local-only machine). If the clone is valid but offline/`git pull` fails, the tool warns and still shows local results plus any on-disk snapshots. Corrupt individual snapshot JSON files are skipped with a stderr warning; valid siblings still appear in the aggregate.
+
+`--install-scheduler` runs a one-shot **smoke publish** before registering the OS scheduler, then prints the snapshot path so you can confirm a file landed in the state repo.
 
 **Migration:** If you installed the scheduler before sticky config existed, re-run `--install-scheduler` once (or create the TOML file manually). Until then, interactive scans stay local-only unless you pass `--state-repo`.
 
 ### Privacy warning
 
-Snapshots can include repository **paths** and **branch names**. Keep the state repository private. Use `--redact-paths` if you want basenames only in published JSON. Agent logs intentionally avoid dumping full snapshot payloads.
+Snapshots can include repository **paths**, **branch names**, and normalized **`origin`** URLs (org/repo identity). Keep the state repository private. Use `--redact-paths` if you want basenames only for paths and a stable hash instead of the origin URL (correlation across machines still works because the hash is deterministic). Agent logs intentionally avoid dumping full snapshot payloads.
 
 ### Setup
 
@@ -121,7 +124,7 @@ Snapshots can include repository **paths** and **branch names**. Keep the state 
 # Run agent in the foreground (default interval 30s)
 ./find-uncommitted --agent --state-repo /path/to/state-clone /path/to/scan/root
 
-# Install OS scheduler (writes sticky config + Windows Task Scheduler / Linux systemd user service)
+# Install OS scheduler (writes sticky config, smoke-publishes a snapshot, then registers Task Scheduler / systemd)
 ./find-uncommitted --install-scheduler --state-repo /path/to/state-clone /path/to/scan/root
 
 # After install, bare scans use sticky config (aggregate remotes by default)
@@ -168,7 +171,7 @@ Useful flags:
 | `--machine-id` | Override hostname-based machine id |
 | `--redact-paths` | Publish basename-only paths |
 | `--no-remote` | Local scan only even if a state repo is configured |
-| `--install-scheduler` / `--uninstall-scheduler` | OS autostart integration (also writes sticky config on install) |
+| `--install-scheduler` / `--uninstall-scheduler` | OS autostart integration (install writes sticky config + smoke-publishes a snapshot) |
 
 ## Output Example
 
@@ -294,38 +297,38 @@ This will automatically run the necessary `git config` commands to resolve owner
 
 ### Windows
 ```bash
-# Build the main executable
-go build -o find-uncommitted.exe main.go
+# Build the main executable (package ".", not main.go — the tool is multi-file)
+go build -o find-uncommitted.exe .
 
 # Build the ownership fixer
 cd fix-ownership-tool
-go build -o fix-ownership.exe fix-ownership.go
+go build -o fix-ownership.exe .
 cd ..
 ```
 
 ### Linux/macOS
 ```bash
-# Build the main executable
-go build -o find-uncommitted main.go
+# Build the main executable (package ".", not main.go — the tool is multi-file)
+go build -o find-uncommitted .
 
 # Build the ownership fixer
 cd fix-ownership-tool
-go build -o fix-ownership fix-ownership.go
+go build -o fix-ownership .
 cd ..
 ```
 
 ### Cross-platform build
 ```bash
 # Build for Windows from Linux/macOS
-GOOS=windows GOARCH=amd64 go build -o find-uncommitted.exe main.go
+GOOS=windows GOARCH=amd64 go build -o find-uncommitted.exe .
 cd fix-ownership-tool
-GOOS=windows GOARCH=amd64 go build -o fix-ownership.exe fix-ownership.go
+GOOS=windows GOARCH=amd64 go build -o fix-ownership.exe .
 cd ..
 
 # Build for Linux from Windows
-GOOS=linux GOARCH=amd64 go build -o find-uncommitted main.go
+GOOS=linux GOARCH=amd64 go build -o find-uncommitted .
 cd fix-ownership-tool
-GOOS=linux GOARCH=amd64 go build -o fix-ownership fix-ownership.go
+GOOS=linux GOARCH=amd64 go build -o fix-ownership .
 cd ..
 ```
 

@@ -114,12 +114,7 @@ func runAgentTick(cfg AgentConfig) {
 		// Continue: local write still useful even if pull failed.
 	}
 
-	started := time.Now()
-	repos := findGitRepos(cfg.ScanRoot, cfg.StateRepoDir)
-	results := checkRepoStatuses(repos, cfg.DirtyOnly)
-	snap := BuildMachineSnapshot(cfg.MachineID, cfg.ScanRoot, results, started, cfg.RedactPaths)
-
-	committed, err := PublishLocalSnapshot(cfg.Sync, snap)
+	snap, committed, err := publishAgentSnapshot(cfg)
 	if err != nil {
 		warn("%v", err)
 		return
@@ -134,6 +129,32 @@ func runAgentTick(cfg AgentConfig) {
 		fmt.Printf("Published snapshot at %s (%d repos)\n",
 			snap.UpdatedAt.Format(time.RFC3339), len(snap.Repos))
 	}
+}
+
+// smokePublishOnce runs one scan+publish for --install-scheduler verification.
+// Returns the on-disk snapshot path on success so install can print proof the file landed.
+func smokePublishOnce(cfg AgentConfig) (string, error) {
+	cfg.Sync.StateRepoDir = cfg.StateRepoDir
+	cfg.Sync.MachineID = cfg.MachineID
+
+	if err := PullStateRepo(cfg.Sync); err != nil {
+		// Pull may fail offline; still require a successful local publish.
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	}
+	if _, _, err := publishAgentSnapshot(cfg); err != nil {
+		return "", err
+	}
+	return SnapshotFilePath(cfg.StateRepoDir, cfg.MachineID), nil
+}
+
+// publishAgentSnapshot scans and publishes one machine snapshot.
+func publishAgentSnapshot(cfg AgentConfig) (MachineSnapshot, bool, error) {
+	started := time.Now()
+	repos := findGitRepos(cfg.ScanRoot, cfg.StateRepoDir)
+	results := checkRepoStatuses(repos, cfg.DirtyOnly)
+	snap := BuildMachineSnapshot(cfg.MachineID, cfg.ScanRoot, results, started, cfg.RedactPaths)
+	committed, err := PublishLocalSnapshot(cfg.Sync, snap)
+	return snap, committed, err
 }
 
 // checkRepoStatuses checks each repo path concurrently and optionally filters clean repos.

@@ -54,6 +54,18 @@ func TestLoadSaveUserConfig(t *testing.T) {
 	}
 }
 
+func TestLoadUserConfigCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte("state_repo = [\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadUserConfig(path)
+	if err == nil {
+		t.Fatal("expected parse error for corrupt TOML")
+	}
+}
+
 func TestResolveSettingsPrecedence(t *testing.T) {
 	file := UserConfig{
 		StateRepo: "/from/file",

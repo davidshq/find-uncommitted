@@ -49,7 +49,13 @@ func BuildAggregateRows(localMachine string, localResults []RepoStatus, remote [
 			})
 		}
 	}
+	// Sort by project identity first so the same repo on two machines lands
+	// together, then by machine, then by path as a stable tiebreaker.
 	sort.Slice(rows, func(i, j int) bool {
+		ki, kj := repoCorrelationKey(rows[i].Repo), repoCorrelationKey(rows[j].Repo)
+		if ki != kj {
+			return ki < kj
+		}
 		if rows[i].Machine != rows[j].Machine {
 			return rows[i].Machine < rows[j].Machine
 		}
@@ -222,7 +228,7 @@ func exportAggregateToCSV(rows []AggregateRow, filename string, dirtyOnlyFilter 
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	header := []string{"Machine", "Local", "Stale", "Repository", "Branch", "Status", "Changes"}
+	header := []string{"Machine", "Local", "Stale", "Repository", "Origin", "Branch", "Status", "Changes"}
 	if err := writer.Write(header); err != nil {
 		return fmt.Errorf("failed to write header to CSV: %v", err)
 	}
@@ -230,7 +236,7 @@ func exportAggregateToCSV(rows []AggregateRow, filename string, dirtyOnlyFilter 
 	for _, row := range rows {
 		if row.LoadError != "" {
 			if err := writer.Write([]string{
-				row.Machine, "false", "false", "", "", "Error", row.LoadError,
+				row.Machine, "false", "false", "", "", "", "Error", row.LoadError,
 			}); err != nil {
 				return err
 			}
@@ -245,6 +251,7 @@ func exportAggregateToCSV(rows []AggregateRow, filename string, dirtyOnlyFilter 
 			fmt.Sprintf("%t", row.Local),
 			fmt.Sprintf("%t", row.Stale),
 			row.Repo.Path,
+			row.Repo.Origin,
 			row.Repo.Branch,
 			statusText,
 			changesText,

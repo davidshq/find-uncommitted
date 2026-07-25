@@ -32,6 +32,21 @@ The CLI SHALL load latest available snapshots from all machines in shared state 
 - **WHEN** the user passes `--no-remote`
 - **THEN** the CLI does not load other machines' snapshots even if a state repository is configured
 
+### Requirement: Origin-based project identity in snapshots
+Each published repository entry SHALL include a normalized `origin` remote URL when the repository has an `origin` remote, so the same project can be correlated across machines despite differing local filesystem paths. SSH and HTTPS forms of the same remote SHALL canonicalize to the same identity. Repositories without an `origin` remote MAY omit the field; aggregate sorting SHALL fall back to path basename in that case.
+
+#### Scenario: Snapshot carries normalized origin
+- **WHEN** a scanned repository has `remote.origin.url` set
+- **THEN** the published snapshot entry includes a normalized `origin` field (for example both `git@github.com:acme/app.git` and `https://github.com/acme/app.git` become `github.com/acme/app`)
+
+#### Scenario: Aggregate groups by origin across machines
+- **WHEN** two machines publish snapshots for clones of the same origin at different local paths
+- **THEN** the aggregate view sorts those entries adjacent by shared origin identity
+
+#### Scenario: Redacted origin still correlates
+- **WHEN** `--redact-paths` is enabled and a repository has an origin
+- **THEN** the published `origin` is a stable hash of the normalized URL so machines can still correlate without exposing the raw remote
+
 ### Requirement: Snapshot freshness signaling
 The CLI SHALL mark machine snapshots as stale when their last update time exceeds a configurable staleness threshold.
 
@@ -54,8 +69,16 @@ The background publisher SHALL continue operating when network or remote Git acc
 - **THEN** the agent logs a non-fatal warning and retries on a later cycle
 
 ### Requirement: Offline-tolerant interactive aggregate loading
-Interactive runs that attempt to load shared state SHALL tolerate missing clones and pull failures without aborting the local scan.
+Interactive runs that attempt to load shared state SHALL tolerate pull failures without aborting the local scan when the state repository path itself is valid. Missing or invalid state repository paths SHALL fail loudly when remote loading is enabled. Individual corrupt snapshot files SHALL be skipped with a warning so valid sibling snapshots still appear in the aggregate.
 
 #### Scenario: Pull failure during interactive aggregate
-- **WHEN** a state repository is configured for an interactive run and `git pull` fails
+- **WHEN** a valid state repository is configured for an interactive run and `git pull` fails
 - **THEN** the CLI warns, attempts to use on-disk snapshots if present, and still shows local scan results
+
+#### Scenario: Invalid state repository path
+- **WHEN** remote loading is enabled and the configured state repository path is missing or not a git repository
+- **THEN** the CLI exits with an error instead of silently showing a local-only table
+
+#### Scenario: Corrupt snapshot file among valid siblings
+- **WHEN** one machine snapshot JSON file is corrupt and others are valid
+- **THEN** the CLI warns about the corrupt file, skips it, and still displays aggregate rows from valid snapshots

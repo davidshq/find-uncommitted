@@ -226,3 +226,36 @@ func TestBuildMachineSnapshotSortsByPath(t *testing.T) {
 		t.Fatalf("unsorted: %+v", snap.Repos)
 	}
 }
+
+func TestSmokePublishOnceWritesSnapshot(t *testing.T) {
+	state := t.TempDir()
+	scan := t.TempDir()
+	g := newScriptedGit()
+	g.enqueue("pull", gitResult{}) // PullStateRepo
+	g.enqueue("add", gitResult{})
+	g.enqueue("commit", gitResult{})
+	g.enqueue("pull", gitResult{}) // rebaseAndPush
+	g.enqueue("push", gitResult{})
+
+	path, err := smokePublishOnce(AgentConfig{
+		ScanRoot:     scan,
+		StateRepoDir: state,
+		MachineID:    "smoke-box",
+		Sync: SyncConfig{
+			StateRepoDir: state,
+			MachineID:    "smoke-box",
+			Runner:       g,
+			RetryDelay:   time.Millisecond,
+		},
+	})
+	if err != nil {
+		t.Fatalf("smokePublishOnce: %v", err)
+	}
+	want := SnapshotFilePath(state, "smoke-box")
+	if path != want {
+		t.Fatalf("path: got %q want %q", path, want)
+	}
+	if _, err := ReadMachineSnapshot(path); err != nil {
+		t.Fatalf("snapshot not readable after smoke: %v", err)
+	}
+}

@@ -99,6 +99,62 @@ func TestLoadAllMachineSnapshotsStaleAndInvalid(t *testing.T) {
 	}
 }
 
+func TestWarnCorruptSnapshots(t *testing.T) {
+	dir := t.TempDir()
+	badPath := filepath.Join(dir, "bad.json")
+	remote := []LoadedSnapshot{
+		{FilePath: badPath, LoadErr: "parse snapshot: invalid"},
+		{
+			Snapshot: MachineSnapshot{
+				MachineID: "ok",
+				UpdatedAt: time.Now().UTC(),
+				Repos:     []RepoSnapshot{{Path: "/a", Branch: "main", IsClean: true}},
+			},
+			FilePath: filepath.Join(dir, "ok.json"),
+		},
+	}
+	warnCorruptSnapshots(remote)
+	rows := BuildAggregateRows("local", nil, remote)
+	var sawErr, sawOK bool
+	for _, r := range rows {
+		if r.LoadError != "" {
+			sawErr = true
+		}
+		if r.Machine == "ok" && r.Repo.Path == "/a" {
+			sawOK = true
+		}
+	}
+	if !sawErr || !sawOK {
+		t.Fatalf("expected corrupt skipped with warning path and valid sibling kept: %+v", rows)
+	}
+}
+
+func TestBuildAggregateRowsPreservesLoadError(t *testing.T) {
+	remote := []LoadedSnapshot{
+		{FilePath: "/state/machines/broken.json", LoadErr: "parse failed"},
+		{
+			Snapshot: MachineSnapshot{
+				MachineID: "other",
+				UpdatedAt: time.Now().UTC(),
+				Repos:     []RepoSnapshot{{Path: "/r", Branch: "main", IsClean: true}},
+			},
+		},
+	}
+	rows := BuildAggregateRows("me", nil, remote)
+	if len(rows) != 2 {
+		t.Fatalf("expected error row + other repo, got %d: %+v", len(rows), rows)
+	}
+	var sawErr bool
+	for _, r := range rows {
+		if r.LoadError == "parse failed" {
+			sawErr = true
+		}
+	}
+	if !sawErr {
+		t.Fatalf("LoadError not preserved: %+v", rows)
+	}
+}
+
 func TestBuildAggregateRowsSkipsLocalDuplicate(t *testing.T) {
 	local := []RepoStatus{{Path: "/local/a", Branch: "main", IsDirty: true, HasUnstaged: true}}
 	remote := []LoadedSnapshot{
@@ -133,6 +189,38 @@ func TestBuildAggregateRowsSkipsLocalDuplicate(t *testing.T) {
 	}
 	if !sawOther || !sawLocal {
 		t.Fatalf("missing expected rows: %+v", rows)
+	}
+}
+
+func TestBuildAggregateRowsSortsByOrigin(t *testing.T) {
+	local := []RepoStatus{
+		{Path: "/laptop/other", Origin: "github.com/acme/other", Branch: "main", IsClean: true},
+		{Path: "/laptop/app", Origin: "github.com/acme/app", Branch: "feat", IsDirty: true, HasUnstaged: true},
+	}
+	remote := []LoadedSnapshot{
+		{
+			Snapshot: MachineSnapshot{
+				MachineID: "desktop",
+				UpdatedAt: time.Now().UTC(),
+				Repos: []RepoSnapshot{
+					{Path: "/desktop/app", Origin: "github.com/acme/app", Branch: "main", IsClean: true},
+				},
+			},
+		},
+	}
+	rows := BuildAggregateRows("laptop", local, remote)
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d: %+v", len(rows), rows)
+	}
+	// Same origin should be adjacent regardless of machine/path.
+	if rows[0].Repo.Origin != "github.com/acme/app" || rows[1].Repo.Origin != "github.com/acme/app" {
+		t.Fatalf("expected app origin rows first (correlated), got %+v", rows)
+	}
+	if rows[0].Machine == rows[1].Machine {
+		t.Fatalf("expected app rows from different machines: %+v", rows)
+	}
+	if rows[2].Repo.Origin != "github.com/acme/other" {
+		t.Fatalf("expected other last, got %+v", rows)
 	}
 }
 
