@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Synchronize uncommitted repository status across machines using shared Git-backed per-machine snapshots with freshness indicators.
+Synchronize repository status across machines using shared Git-backed per-machine snapshots with freshness indicators, and surface soft Attention nudges for local and cross-machine situations without mutating user repositories.
 
 ## Requirements
 
@@ -46,6 +46,63 @@ Each published repository entry SHALL include a normalized `origin` remote URL w
 #### Scenario: Redacted origin still correlates
 - **WHEN** `--redact-paths` is enabled and a repository has an origin
 - **THEN** the published `origin` is a stable hash of the normalized URL so machines can still correlate without exposing the raw remote
+
+### Requirement: Behind-upstream and tip metadata in scans and snapshots
+Each scanned repository with a configured upstream SHALL report whether it is behind that upstream using already-known tracking refs (no mandatory fetch). Published snapshots SHALL include behind status, optional ahead/behind counts, and a short HEAD SHA when available. Older snapshots missing these fields SHALL still load; absent behind/SHA fields SHALL be treated as unknown/false rather than failing parse.
+
+#### Scenario: Local behind detection without fetch
+- **WHEN** a repository has upstream tracking refs that are ahead of HEAD
+- **THEN** the scan marks the repository behind and includes a behind count derived from `HEAD..@{u}`
+
+#### Scenario: Snapshot publishes behind and HEAD SHA
+- **WHEN** the agent publishes a repository that is behind upstream
+- **THEN** the snapshot JSON includes `has_behind` (true), `behind_count`, and `head_sha` when resolvable
+
+#### Scenario: Legacy snapshot without behind fields
+- **WHEN** a machine snapshot JSON omits `has_behind`, counts, and `head_sha`
+- **THEN** the CLI loads it successfully and treats behind as false / SHA empty
+
+### Requirement: Attention nudges for project situations
+When presenting results, the CLI SHALL print an Attention section before the full inventory. Attention entries SHALL suggest advisory verbs only and MUST NOT execute git mutations on user repositories. Situations SHALL include local error, local dirty, local unpushed, local behind, local untracked upstream, cross-machine branch mismatch, same-branch tip mismatch (via published short HEAD SHAs), other-machine dirty/unpushed while local is clean, and stale remote evidence when a remote attention-worthy row is stale and no stronger cue already qualifies staleness. The aggregate inventory SHALL group rows by project identity.
+
+#### Scenario: Attention precedes inventory
+- **WHEN** the CLI finishes a scan (local-only or aggregate)
+- **THEN** output starts with an Attention list of soft suggestions, then a Full inventory section
+
+#### Scenario: Local untracked upstream nudge
+- **WHEN** a local repository has no upstream tracking configured
+- **THEN** Attention includes a nudge to set upstream tracking
+
+#### Scenario: Cross-machine branch mismatch nudge
+- **WHEN** the local clone and another machine's snapshot for the same origin report different branch names
+- **THEN** Attention includes a branch-mismatch nudge naming the other branch and machine
+
+#### Scenario: Same-branch tip mismatch
+- **WHEN** local and remote snapshots share a branch name but different short HEAD SHAs
+- **THEN** Attention includes a tip-mismatch nudge
+
+#### Scenario: Other machine has work
+- **WHEN** the local clone is clean and another machine's snapshot shows dirty or unpushed work for the same origin
+- **THEN** Attention includes a nudge that distinguishes uncommitted work (pull will not help) from unpushed commits
+
+#### Scenario: Dirty-only is situation-aware
+- **WHEN** `--dirty-only` is set and remote loading is enabled
+- **THEN** Attention and inventory are limited to projects that produced at least one situation (clean locals are retained in the scan so cross-machine cues can still fire); load-error rows remain visible
+
+#### Scenario: Nudges never mutate user repos
+- **WHEN** Attention suggests pull, push, commit, stash, or branch switching
+- **THEN** the tool prints text only and does not run those git commands against user repositories
+
+### Requirement: Local-only project identity without origin
+For repositories without an `origin` remote, correlation SHALL use parent-directory plus basename (for example `manuscripts/book`) so identically named repos under different parents do not collide, while similarly laid-out trees on two machines can still match.
+
+#### Scenario: Different parents do not collide
+- **WHEN** two local-only repositories are `/code/app` and `/archive/app`
+- **THEN** they use distinct correlation keys
+
+#### Scenario: Matching layout correlates across machines
+- **WHEN** two machines have local-only clones at `.../manuscripts/book`
+- **THEN** those entries share a correlation key
 
 ### Requirement: Snapshot freshness signaling
 The CLI SHALL mark machine snapshots as stale when their last update time exceeds a configurable staleness threshold.

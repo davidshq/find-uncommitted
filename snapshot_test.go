@@ -7,6 +7,44 @@ import (
 	"time"
 )
 
+func TestReadMachineSnapshotLegacyWithoutBehindFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "legacy.json")
+	// Pre-behind schema: no has_behind / counts / head_sha.
+	legacy := `{
+  "machine_id": "old-box",
+  "updated_at": "2026-07-14T12:00:00Z",
+  "repos": [
+    {
+      "path": "/code/a",
+      "branch": "main",
+      "has_unstaged": false,
+      "has_staged": false,
+      "has_untracked": false,
+      "has_unpushed": false,
+      "has_untracked_upstream": false,
+      "is_dirty": false,
+      "is_clean": true
+    }
+  ],
+  "meta": {"repo_count": 1, "dirty_count": 0, "error_count": 0, "duration_ms": 1, "scan_root": "/code"}
+}`
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := ReadMachineSnapshot(path)
+	if err != nil {
+		t.Fatalf("legacy snapshot should load: %v", err)
+	}
+	if len(snap.Repos) != 1 {
+		t.Fatalf("expected 1 repo, got %d", len(snap.Repos))
+	}
+	r := snap.Repos[0]
+	if r.HasBehind || r.BehindCount != 0 || r.AheadCount != 0 || r.HeadSHA != "" {
+		t.Fatalf("legacy zeros expected, got %+v", r)
+	}
+}
+
 func TestWriteReadMachineSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	path := SnapshotFilePath(dir, "desk/top")

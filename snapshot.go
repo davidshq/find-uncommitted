@@ -14,6 +14,8 @@ import (
 // RepoSnapshot is the serializable form of a single repository's status.
 // Origin is the normalized remote.origin.url used to correlate the same project
 // across machines (empty when the repo has no origin remote).
+// Newer fields (HasBehind, counts, HeadSHA) are omitempty so older snapshots
+// without them still load and simply report no behind/SHA evidence.
 type RepoSnapshot struct {
 	Path                 string `json:"path"`
 	Origin               string `json:"origin,omitempty"`
@@ -22,7 +24,11 @@ type RepoSnapshot struct {
 	HasStaged            bool   `json:"has_staged"`
 	HasUntracked         bool   `json:"has_untracked"`
 	HasUnpushed          bool   `json:"has_unpushed"`
+	HasBehind            bool   `json:"has_behind,omitempty"`
 	HasUntrackedUpstream bool   `json:"has_untracked_upstream"`
+	AheadCount           int    `json:"ahead_count,omitempty"`
+	BehindCount          int    `json:"behind_count,omitempty"`
+	HeadSHA              string `json:"head_sha,omitempty"`
 	IsDirty              bool   `json:"is_dirty"`
 	IsClean              bool   `json:"is_clean"`
 	Error                string `json:"error,omitempty"`
@@ -105,7 +111,11 @@ func RepoStatusToSnapshot(status RepoStatus, redactPaths bool) RepoSnapshot {
 		HasStaged:            status.HasStaged,
 		HasUntracked:         status.HasUntracked,
 		HasUnpushed:          status.HasUnpushed,
+		HasBehind:            status.HasBehind,
 		HasUntrackedUpstream: status.HasUntrackedUpstream,
+		AheadCount:           status.AheadCount,
+		BehindCount:          status.BehindCount,
+		HeadSHA:              status.HeadSHA,
 		IsDirty:              status.IsDirty,
 		IsClean:              status.IsClean,
 		Error:                status.Error,

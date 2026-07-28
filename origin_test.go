@@ -59,10 +59,18 @@ func TestRepoCorrelationKey(t *testing.T) {
 		t.Fatal("same origin should correlate across different paths")
 	}
 
+	// parent/basename: similarly laid-out local-only trees still match.
 	localOnly := RepoSnapshot{Path: "/home/a/manuscripts/book"}
-	otherLocal := RepoSnapshot{Path: "/Users/b/docs/book"}
+	otherLocal := RepoSnapshot{Path: "/Users/b/manuscripts/book"}
 	if repoCorrelationKey(localOnly) != repoCorrelationKey(otherLocal) {
-		t.Fatal("basename fallback should correlate local-only repos with same folder name")
+		t.Fatalf("parent/basename should correlate: %q vs %q",
+			repoCorrelationKey(localOnly), repoCorrelationKey(otherLocal))
+	}
+
+	// Same leaf name under different parents must not collide.
+	otherApp := RepoSnapshot{Path: "/home/a/archive/book"}
+	if repoCorrelationKey(localOnly) == repoCorrelationKey(otherApp) {
+		t.Fatal("different parent folders with same basename must not correlate")
 	}
 
 	if repoCorrelationKey(withOrigin) == repoCorrelationKey(localOnly) {

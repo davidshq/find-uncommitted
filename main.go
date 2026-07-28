@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+// RepoStatus is the live scan result for one local git repository.
+// Ahead/behind counts use already-known upstream tracking refs (no fetch).
 type RepoStatus struct {
 	Path                 string
 	Origin               string // normalized remote.origin.url; empty if none
@@ -20,7 +22,11 @@ type RepoStatus struct {
 	HasStaged            bool
 	HasUntracked         bool
 	HasUnpushed          bool
+	HasBehind            bool
 	HasUntrackedUpstream bool
+	AheadCount           int    // commits ahead of upstream (0 if none/unknown)
+	BehindCount          int    // commits behind upstream (0 if none/unknown)
+	HeadSHA              string // short HEAD SHA for cross-machine tip comparison
 	Branch               string
 	IsDirty              bool
 	IsClean              bool
@@ -45,7 +51,7 @@ func main() {
 	)
 
 	flag.BoolVar(&debugMode, "debug", false, "Enable debug output")
-	flag.BoolVar(&dirtyOnly, "dirty-only", false, "Show only repositories needing attention (dirty, unpushed, untracked upstream, or errors)")
+	flag.BoolVar(&dirtyOnly, "dirty-only", false, "Show only projects/repos needing attention (dirty, unpushed, behind, untracked upstream, cross-machine cues, or errors)")
 	flag.StringVar(&outputFile, "output", "", "Save results to CSV file (e.g., --output results.csv)")
 	flag.StringVar(&stateRepo, "state-repo", "", "Local path to private Git state repository for cross-machine sync")
 	flag.BoolVar(&agentMode, "agent", false, "Run as background agent publishing machine snapshots")
@@ -250,7 +256,7 @@ func main() {
 	// Normal scan mode
 	fmt.Printf("Scanning for git repositories in: %s\n", rootDir)
 	if dirtyOnly {
-		fmt.Println("Showing only repositories needing attention (dirty, unpushed, untracked upstream, or errors)...")
+		fmt.Println("Showing only projects needing attention (local or cross-machine situations)...")
 	}
 	if outputFile != "" {
 		fmt.Printf("Results will be saved to: %s\n", outputFile)
@@ -265,7 +271,11 @@ func main() {
 		fmt.Printf("Found %d git repositories:\n\n", len(repos))
 	}
 
-	results := checkRepoStatuses(repos, dirtyOnly)
+	// When remotes may load, keep clean local repos so cross-machine situations
+	// (other-machine work, branch mismatch) can still be detected; --dirty-only
+	// filters the Attention/inventory presentation instead.
+	willTryRemote := stateRepo != "" && !skipRemote
+	results := checkRepoStatuses(repos, dirtyOnly && !willTryRemote)
 
 	var remote []LoadedSnapshot
 	remoteOK := false
@@ -302,16 +312,38 @@ func main() {
 	var rows []AggregateRow
 	if useAggregate {
 		rows = BuildAggregateRows(machineID, results, remote)
-		displayAggregateTable(rows, dirtyOnly)
+		situations := DetectSituations(rows)
+		if dirtyOnly {
+			keys := ProjectKeysWithSituations(situations)
+			// Also keep load-error rows and single-repo local attention without cross-machine cues.
+			rows = FilterRowsByProjectKeys(rows, keys)
+			// Re-detect so Attention matches filtered inventory (drop orphaned stale-only noise).
+			situations = DetectSituations(rows)
+		}
+		DisplayAttention(situations)
+		fmt.Println("Full inventory:")
+		displayAggregateTable(rows, false) // already situation-filtered when dirty-only
 		printStaleMachineSummary(remote, staleTTL)
 	} else {
+		if dirtyOnly {
+			var filtered []RepoStatus
+			for _, r := range results {
+				if repoNeedsAttention(r) {
+					filtered = append(filtered, r)
+				}
+			}
+			results = filtered
+		}
+		situations := DetectLocalSituations(machineID, results)
+		DisplayAttention(situations)
+		fmt.Println("Full inventory:")
 		displayRepoStatusTable(results)
 	}
 
 	if outputFile != "" {
 		var err error
 		if useAggregate {
-			err = exportAggregateToCSV(rows, outputFile, dirtyOnly)
+			err = exportAggregateToCSV(rows, outputFile, false)
 		} else {
 			err = exportToCSV(results, outputFile)
 		}
@@ -382,6 +414,7 @@ func printSummary(results []RepoStatus) {
 	cleanCount := 0
 	dirtyCount := 0
 	unpushedCount := 0
+	behindCount := 0
 	untrackedUpstreamCount := 0
 	errorCount := 0
 	for _, status := range results {
@@ -391,6 +424,8 @@ func printSummary(results []RepoStatus) {
 			dirtyCount++
 		} else if status.HasUntrackedUpstream {
 			untrackedUpstreamCount++
+		} else if status.HasBehind {
+			behindCount++
 		} else if status.HasUnpushed {
 			unpushedCount++
 		} else {
@@ -399,11 +434,11 @@ func printSummary(results []RepoStatus) {
 	}
 
 	if dirtyOnly {
-		attention := dirtyCount + unpushedCount + untrackedUpstreamCount
+		attention := dirtyCount + unpushedCount + behindCount + untrackedUpstreamCount
 		fmt.Printf("\nSummary: %d repositories needing attention, %d repositories with errors\n", attention, errorCount)
 	} else {
-		fmt.Printf("\nSummary: %d clean repositories, %d repositories with uncommitted changes, %d repositories with unpushed commits, %d repositories with untracked upstream, %d repositories with errors\n",
-			cleanCount, dirtyCount, unpushedCount, untrackedUpstreamCount, errorCount)
+		fmt.Printf("\nSummary: %d clean repositories, %d repositories with uncommitted changes, %d repositories with unpushed commits, %d repositories behind upstream, %d repositories with untracked upstream, %d repositories with errors\n",
+			cleanCount, dirtyCount, unpushedCount, behindCount, untrackedUpstreamCount, errorCount)
 	}
 }
 
@@ -585,29 +620,48 @@ func checkRepoStatus(repoPath string) RepoStatus {
 			status.Error = fmt.Sprintf("Failed to check upstream tracking: %v", upstreamErr)
 		}
 	} else {
-		// Check for unpushed commits only when an upstream exists.
-		unpushed, err := exec.Command("git", "-C", repoPath, "rev-list", "--count", "@{u}..HEAD").Output()
-		if err != nil {
-			if debugMode {
-				fmt.Printf("[DEBUG] Failed to check unpushed commits in %s: %v\n", repoPath, err)
-			}
-		} else {
-			count, parseErr := strconv.Atoi(strings.TrimSpace(string(unpushed)))
-			if parseErr != nil {
-				if debugMode {
-					fmt.Printf("[DEBUG] Failed to parse unpushed count in %s: %v\n", repoPath, parseErr)
-				}
-			} else if count > 0 {
-				status.HasUnpushed = true
-			}
-		}
+		// Ahead/behind against cached upstream refs only (no fetch).
+		status.AheadCount = revListCount(repoPath, "@{u}..HEAD")
+		status.BehindCount = revListCount(repoPath, "HEAD..@{u}")
+		status.HasUnpushed = status.AheadCount > 0
+		status.HasBehind = status.BehindCount > 0
 	}
+
+	status.HeadSHA = shortHeadSHA(repoPath)
 
 	// Dirty means working tree changes only.
 	status.IsDirty = status.HasUnstaged || status.HasStaged || status.HasUntracked
-	status.IsClean = !status.IsDirty && !status.HasUnpushed && !status.HasUntrackedUpstream
+	status.IsClean = !status.IsDirty && !status.HasUnpushed && !status.HasBehind && !status.HasUntrackedUpstream
 
 	return status
+}
+
+// revListCount runs `git rev-list --count <range>` and returns 0 on any failure.
+func revListCount(repoPath, revRange string) int {
+	out, err := exec.Command("git", "-C", repoPath, "rev-list", "--count", revRange).Output()
+	if err != nil {
+		if debugMode {
+			fmt.Printf("[DEBUG] Failed rev-list %s in %s: %v\n", revRange, repoPath, err)
+		}
+		return 0
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		if debugMode {
+			fmt.Printf("[DEBUG] Failed to parse rev-list count in %s: %v\n", repoPath, err)
+		}
+		return 0
+	}
+	return count
+}
+
+// shortHeadSHA returns a short HEAD commit hash, or empty when unavailable.
+func shortHeadSHA(repoPath string) string {
+	out, err := exec.Command("git", "-C", repoPath, "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func displayRepoStatusTable(results []RepoStatus) {
@@ -646,9 +700,15 @@ func displayRepoStatusTable(results []RepoStatus) {
 		} else if status.HasUntrackedUpstream {
 			statusText = "🔗 Untracked Upstream"
 			changesText = "untracked-upstream"
+		} else if status.HasBehind && status.HasUnpushed {
+			statusText = "↕️ Diverged"
+			changesText = strings.Join(getChangesText(status), ", ")
+		} else if status.HasBehind {
+			statusText = "⬇️ Behind"
+			changesText = strings.Join(getChangesText(status), ", ")
 		} else if status.HasUnpushed {
 			statusText = "⬆️ Unpushed"
-			changesText = "unpushed"
+			changesText = strings.Join(getChangesText(status), ", ")
 		} else {
 			statusText = "✅ Clean"
 			changesText = "-"
@@ -695,6 +755,10 @@ func exportToCSV(results []RepoStatus, filename string) error {
 			statusText = "Dirty"
 		} else if status.HasUntrackedUpstream {
 			statusText = "UntrackedUpstream"
+		} else if status.HasBehind && status.HasUnpushed {
+			statusText = "Diverged"
+		} else if status.HasBehind {
+			statusText = "Behind"
 		} else if status.HasUnpushed {
 			statusText = "Unpushed"
 		} else {
@@ -727,7 +791,18 @@ func getChangesText(status RepoStatus) []string {
 		changes = append(changes, "untracked")
 	}
 	if status.HasUnpushed {
-		changes = append(changes, "unpushed")
+		if status.AheadCount > 0 {
+			changes = append(changes, fmt.Sprintf("unpushed:%d", status.AheadCount))
+		} else {
+			changes = append(changes, "unpushed")
+		}
+	}
+	if status.HasBehind {
+		if status.BehindCount > 0 {
+			changes = append(changes, fmt.Sprintf("behind:%d", status.BehindCount))
+		} else {
+			changes = append(changes, "behind")
+		}
 	}
 	if status.HasUntrackedUpstream {
 		changes = append(changes, "untracked-upstream")

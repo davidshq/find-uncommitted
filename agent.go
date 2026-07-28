@@ -206,9 +206,9 @@ func checkRepoStatuses(repos []string, dirtyOnlyFilter bool) []RepoStatus {
 }
 
 func repoNeedsAttention(status RepoStatus) bool {
-	return status.Error != "" || status.IsDirty || status.HasUnpushed || status.HasUntrackedUpstream
+	return status.Error != "" || status.IsDirty || status.HasUnpushed || status.HasBehind || status.HasUntrackedUpstream
 }
 
 func snapshotNeedsAttention(repo RepoSnapshot) bool {
-	return repo.Error != "" || repo.IsDirty || repo.HasUnpushed || repo.HasUntrackedUpstream
+	return repo.Error != "" || repo.IsDirty || repo.HasUnpushed || repo.HasBehind || repo.HasUntrackedUpstream
 }

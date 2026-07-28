@@ -76,44 +76,51 @@ func displayAggregateTable(rows []AggregateRow, dirtyOnlyFilter bool) {
 
 	wd, _ := os.Getwd()
 	shown := 0
+
+	// Load-error rows first (not part of a project group).
 	for _, row := range rows {
-		if row.LoadError != "" {
-			fmt.Printf("%-*s %-*s %-*s %-*s %s\n",
-				machineCol, truncate(row.Machine, machineCol-1),
-				pathCol, "-",
-				branchCol, "-",
-				statusCol, "❌ Error",
-				row.LoadError)
-			shown++
+		if row.LoadError == "" {
 			continue
 		}
-
-		statusText, changesText := repoSnapshotStatusText(row.Repo)
-		if dirtyOnlyFilter && !snapshotNeedsAttention(row.Repo) {
-			continue
-		}
-
-		machine := row.Machine
-		if row.Local {
-			machine = machine + "*"
-		}
-		if row.Stale {
-			machine = machine + " (stale)"
-		}
-
-		path := displayPath(wd, row.Repo.Path)
-		branch := row.Repo.Branch
-		if len(branch) > branchCol-3 {
-			branch = branch[:branchCol-3] + "..."
-		}
-
 		fmt.Printf("%-*s %-*s %-*s %-*s %s\n",
-			machineCol, truncate(machine, machineCol),
-			pathCol, truncate(path, pathCol),
-			branchCol, branch,
-			statusCol, statusText,
-			changesText)
+			machineCol, truncate(row.Machine, machineCol-1),
+			pathCol, "-",
+			branchCol, "-",
+			statusCol, "❌ Error",
+			row.LoadError)
 		shown++
+	}
+
+	for _, g := range GroupRowsByProject(rows) {
+		fmt.Printf("\n%s\n", g.Label)
+		for _, row := range g.Rows {
+			statusText, changesText := repoSnapshotStatusText(row.Repo)
+			if dirtyOnlyFilter && !snapshotNeedsAttention(row.Repo) {
+				continue
+			}
+
+			machine := row.Machine
+			if row.Local {
+				machine = machine + "*"
+			}
+			if row.Stale {
+				machine = machine + " (stale)"
+			}
+
+			path := displayPath(wd, row.Repo.Path)
+			branch := row.Repo.Branch
+			if len(branch) > branchCol-3 {
+				branch = branch[:branchCol-3] + "..."
+			}
+
+			fmt.Printf("  %-*s %-*s %-*s %-*s %s\n",
+				machineCol-2, truncate(machine, machineCol-2),
+				pathCol, truncate(path, pathCol),
+				branchCol, branch,
+				statusCol, statusText,
+				changesText)
+			shown++
+		}
 	}
 	if shown == 0 {
 		fmt.Println("(no repositories to display)")
@@ -130,8 +137,14 @@ func repoSnapshotStatusText(repo RepoSnapshot) (statusText, changesText string) 
 	if repo.HasUntrackedUpstream {
 		return "🔗 Untracked Upstream", "untracked-upstream"
 	}
+	if repo.HasBehind && repo.HasUnpushed {
+		return "↕️ Diverged", strings.Join(snapshotChangesText(repo), ", ")
+	}
+	if repo.HasBehind {
+		return "⬇️ Behind", strings.Join(snapshotChangesText(repo), ", ")
+	}
 	if repo.HasUnpushed {
-		return "⬆️ Unpushed", "unpushed"
+		return "⬆️ Unpushed", strings.Join(snapshotChangesText(repo), ", ")
 	}
 	return "✅ Clean", "-"
 }
@@ -148,7 +161,18 @@ func snapshotChangesText(repo RepoSnapshot) []string {
 		changes = append(changes, "untracked")
 	}
 	if repo.HasUnpushed {
-		changes = append(changes, "unpushed")
+		if repo.AheadCount > 0 {
+			changes = append(changes, fmt.Sprintf("unpushed:%d", repo.AheadCount))
+		} else {
+			changes = append(changes, "unpushed")
+		}
+	}
+	if repo.HasBehind {
+		if repo.BehindCount > 0 {
+			changes = append(changes, fmt.Sprintf("behind:%d", repo.BehindCount))
+		} else {
+			changes = append(changes, "behind")
+		}
 	}
 	if repo.HasUntrackedUpstream {
 		changes = append(changes, "untracked-upstream")
@@ -272,8 +296,14 @@ func repoSnapshotStatusTextPlain(repo RepoSnapshot) (statusText, changesText str
 	if repo.HasUntrackedUpstream {
 		return "UntrackedUpstream", "untracked-upstream"
 	}
+	if repo.HasBehind && repo.HasUnpushed {
+		return "Diverged", strings.Join(snapshotChangesText(repo), ", ")
+	}
+	if repo.HasBehind {
+		return "Behind", strings.Join(snapshotChangesText(repo), ", ")
+	}
 	if repo.HasUnpushed {
-		return "Unpushed", "unpushed"
+		return "Unpushed", strings.Join(snapshotChangesText(repo), ", ")
 	}
 	return "Clean", "-"
 }

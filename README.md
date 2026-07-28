@@ -6,10 +6,11 @@ A Go application that scans your hard drive for git repositories and reports on 
 
 - 🔍 **Recursive scanning**: Automatically finds all git repositories in the specified directory
 - ⚡ **Concurrent processing**: Uses goroutines to check repository status in parallel
-- 📊 **Detailed reporting**: Shows branch name, unstaged changes, staged changes, untracked files, and unpushed commits
+- 📊 **Detailed reporting**: Shows branch name, unstaged/staged/untracked changes, unpushed commits, and behind-upstream status
+- 💡 **Attention nudges**: Soft suggestions (commit, push, pull, branch mismatch, other-machine work) — never auto-runs git on your repos
 - 🚫 **Smart filtering**: Skips system directories and common build folders to improve performance
 - 📈 **Summary statistics**: Provides a count of clean vs. dirty repositories
-- 🎯 **Dirty-only mode**: Option to show only repositories needing attention (dirty, unpushed, untracked upstream, errors)
+- 🎯 **Dirty-only mode**: Option to show only projects needing attention (including cross-machine situations)
 - 📄 **CSV export**: Save results to a CSV file for further analysis
 - 🛠️ **Ownership issue detection**: Identifies and provides guidance for Git ownership problems
 - 🔧 **Debug mode**: Optional debug output for troubleshooting
@@ -158,7 +159,18 @@ Windows notes:
 ./find-uncommitted /path/to/scan/root
 ```
 
-Local rows are marked with `*` on the machine column. Stale machines are annotated in the table and summarized after output.
+Output starts with an **Attention** section (soft suggestions only — no git commands are run on your repos), then a **Full inventory** table. Local rows are marked with `*` on the machine column. Stale machines are annotated in the table and summarized after output.
+
+Attention covers:
+
+- Local error, dirty, unpushed, behind upstream, and untracked upstream (behind uses cached tracking refs; no automatic `git fetch`)
+- Cross-machine branch mismatch and same-branch tip mismatch (via published short HEAD SHAs) for the same project identity
+- Other machine has dirty work (pull will not help) or unpushed commits while local is clean
+- Stale remote evidence when a remote attention-worthy snapshot is old
+
+The Full inventory groups rows under each project identity (origin, or parent/basename for local-only repos).
+
+With `--dirty-only`, Attention and inventory are limited to projects that produced at least one situation (clean local clones are still scanned when remotes are enabled so cross-machine cues can fire). Load-error snapshot rows remain visible.
 
 Useful flags:
 
@@ -175,55 +187,65 @@ Useful flags:
 
 ## Output Example
 
-The tool now displays results in a clean tabular format:
+The tool prints an Attention list first, then a full inventory table:
 
 ```
-Scanning for git repositories in: /home/username/projects
-This may take a while depending on the size of your drive...
+Attention (suggestions only — no commands are run):
+  • github.com/you/work-project
+      → commit or stash local changes before switching machines
+  • github.com/you/work-project
+      → pull before continuing (behind upstream by 2 commit(s))
 
-Found 24 git repositories:
-
+Full inventory:
 Repository                                    Branch          Status   Changes
 ------------------------------------------------------------------------------------------
 ../my-project                                 main            ✅ Clean    -
-../work-project                               feature/new...  ⚠️  Dirty  unstaged, untracked
+../work-project                               feature/new...  ⚠️  Dirty  unstaged, untracked, behind:2
 ../old-project                                develop         ⚠️  Dirty  staged
-../notes-project                              master          ⚠️  Dirty  unpushed
+../notes-project                              master          ⬆️ Unpushed  unpushed:1
+../stale-clone                                main            ⬇️ Behind   behind:3
 
-Summary: 21 clean repositories, 3 repositories with uncommitted changes, 0 repositories with errors
+Summary: 21 clean repositories, 3 repositories with uncommitted changes, 1 repositories with unpushed commits, 1 repositories behind upstream, 0 repositories with untracked upstream, 0 repositories with errors
 ```
 
 The output shows:
+- **Attention**: Soft nudges for what to do next (never auto-executed)
 - **Repository**: Path to the git repository (truncated for readability)
 - **Branch**: Current branch name (truncated if too long)
 - **Status**: One of:
    - ✅ Clean
    - ⚠️ Dirty (working tree/index changes)
    - ⬆️ Unpushed (ahead of upstream)
+   - ⬇️ Behind (behind upstream per cached tracking refs)
+   - ↕️ Diverged (both ahead and behind)
    - 🔗 Untracked Upstream (branch has no configured upstream)
    - ❌ Error
 - **Changes**: Specific types of changes detected:
   - `unstaged`: Modified files not yet staged
   - `staged`: Files staged for commit
   - `untracked`: New files not tracked by git
-  - `unpushed`: Commits that haven't been pushed to remote
-   - `untracked-upstream`: Branch has no upstream tracking configuration
+  - `unpushed` / `unpushed:N`: Commits that haven't been pushed to remote
+  - `behind` / `behind:N`: Commits present on upstream that aren't local yet
+  - `untracked-upstream`: Branch has no upstream tracking configuration
 
 ## Dirty-Only Mode
 
-Use the `--dirty-only` flag to show only repositories that need attention:
+Use the `--dirty-only` flag to show only projects that need attention:
 
 ```bash
 ./find-uncommitted --dirty-only /home/username/projects
 ```
 
-This will filter out clean repositories and keep those that need attention:
+This keeps Attention and inventory limited to:
+
+- Git errors
 - Unstaged / staged / untracked working-tree changes
 - Unpushed commits
+- Behind upstream (cached tracking refs)
 - Untracked upstream
-- Git errors
+- Cross-machine situations (branch/tip mismatch, other-machine work, stale remote evidence) when a state repo is configured
 
-This is particularly useful when you want to quickly identify which repositories need attention without scrolling through a long list of clean repositories.
+When remotes are enabled, clean local clones are still scanned so cues like "other machine has uncommitted work" can appear; only projects without any situation are hidden.
 
 ## CSV Export
 
@@ -236,8 +258,8 @@ Use the `--output` flag to save results to a CSV file for further analysis:
 The CSV file will contain the following columns:
 - **Repository**: Path to the git repository
 - **Branch**: Current branch name
-- **Status**: Clean, Dirty, Unpushed, UntrackedUpstream, or Error with details
-- **Changes**: Comma-separated list of change types (unstaged, staged, untracked, unpushed, untracked-upstream)
+- **Status**: Clean, Dirty, Unpushed, Behind, Diverged, UntrackedUpstream, or Error with details
+- **Changes**: Comma-separated list of change types (unstaged, staged, untracked, unpushed, behind, untracked-upstream)
 
 This is useful for:
 - Importing into spreadsheet applications for analysis
@@ -337,16 +359,15 @@ cd ..
 1. **Directory Scanning**: Uses `filepath.Walk` to recursively scan the specified directory
 2. **Git Detection**: Looks for `.git` directories to identify git repositories
 3. **Status Checking**: For each repository found, runs git commands to check:
-   - Current branch
+   - Current branch and short HEAD SHA
    - Unstaged changes (`git diff --name-only`)
    - Staged changes (`git diff --cached --name-only`)
    - Untracked files (`git ls-files --others --exclude-standard`)
-   - Unpushed commits (`git rev-list --count @{u}..HEAD`)
+   - Ahead of upstream (`git rev-list --count @{u}..HEAD`) when tracking exists
+   - Behind upstream (`git rev-list --count HEAD..@{u}`) against cached tracking refs (no automatic fetch)
 4. **Concurrent Processing**: Uses goroutines to check multiple repositories simultaneously
-5. **Results Filtering**: Optionally filters out clean repositories when using `--dirty-only` flag
-6. **Results Display**: Shows a formatted report with emojis and clear status indicators
-7. **CSV Export**: Optionally saves results to a CSV file for external analysis
-8. **Error Handling**: Provides specific guidance for common Git issues like ownership problems
+5. **Attention + inventory**: Builds soft situation nudges, then displays a formatted inventory (and optional CSV)
+6. **Error Handling**: Provides specific guidance for common Git issues like ownership problems
 
 ## Performance Notes
 

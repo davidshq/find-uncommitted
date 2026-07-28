@@ -98,8 +98,9 @@ func redactOrigin(origin string) string {
 }
 
 // repoCorrelationKey is the stable identity used to match one project across
-// machines. Prefer normalized origin; fall back to path basename for local-only
-// repos (e.g. manuscripts with no remote).
+// machines. Prefer normalized origin; for local-only repos fall back to
+// parent/basename (e.g. manuscripts/book) so same-named folders under different
+// parents do not collide, while similarly laid-out trees on two machines still match.
 func repoCorrelationKey(repo RepoSnapshot) string {
 	if o := strings.TrimSpace(repo.Origin); o != "" {
 		return "origin:" + o
@@ -107,6 +108,10 @@ func repoCorrelationKey(repo RepoSnapshot) string {
 	base := filepath.Base(repo.Path)
 	if base == "" || base == "." || base == string(filepath.Separator) || base == "…" {
 		return "path:" + repo.Path
+	}
+	parent := filepath.Base(filepath.Dir(repo.Path))
+	if parent != "" && parent != "." && parent != string(filepath.Separator) && parent != "…" {
+		return "basename:" + parent + "/" + base
 	}
 	return "basename:" + base
 }
