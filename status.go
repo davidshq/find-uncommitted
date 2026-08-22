@@ -6,19 +6,22 @@ import (
 )
 
 // needsAttention is the shared predicate for dirty-only filtering.
-func needsAttention(err string, isDirty, hasUnpushed, hasBehind, hasUntrackedUpstream bool) bool {
+func needsAttention(err string, isEmpty, isDirty, hasUnpushed, hasBehind, hasUntrackedUpstream bool) bool {
+	if isEmpty && err == "" && !isDirty {
+		return false
+	}
 	return err != "" || isDirty || hasUnpushed || hasBehind || hasUntrackedUpstream
 }
 
 // snapshotNeedsAttention reports whether a repo snapshot should appear in
 // dirty-only views and attention summaries.
 func snapshotNeedsAttention(repo RepoSnapshot) bool {
-	return needsAttention(repo.Error, repo.IsDirty, repo.HasUnpushed, repo.HasBehind, repo.HasUntrackedUpstream)
+	return needsAttention(repo.Error, repo.IsEmpty, repo.IsDirty, repo.HasUnpushed, repo.HasBehind, repo.HasUntrackedUpstream)
 }
 
 // repoNeedsAttention is the live-scan equivalent of snapshotNeedsAttention.
 func repoNeedsAttention(status RepoStatus) bool {
-	return needsAttention(status.Error, status.IsDirty, status.HasUnpushed, status.HasBehind, status.HasUntrackedUpstream)
+	return needsAttention(status.Error, status.IsEmpty, status.IsDirty, status.HasUnpushed, status.HasBehind, status.HasUntrackedUpstream)
 }
 
 // snapshotChangesText lists change tags for a repository snapshot.
@@ -69,6 +72,12 @@ func repoStatusText(repo RepoSnapshot, plain bool) (statusText, changesText stri
 			return "Dirty", changes
 		}
 		return "⚠️  Dirty", changes
+	}
+	if repo.IsEmpty {
+		if plain {
+			return "Empty", "no commits yet"
+		}
+		return "📭 Empty", "no commits yet"
 	}
 	if repo.HasUntrackedUpstream {
 		if plain {

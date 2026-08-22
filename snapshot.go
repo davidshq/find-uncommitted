@@ -31,6 +31,7 @@ type RepoSnapshot struct {
 	HeadSHA              string `json:"head_sha,omitempty"`
 	IsDirty              bool   `json:"is_dirty"`
 	IsClean              bool   `json:"is_clean"`
+	IsEmpty              bool   `json:"is_empty,omitempty"`
 	Error                string `json:"error,omitempty"`
 }
 
@@ -118,6 +119,7 @@ func RepoStatusToSnapshot(status RepoStatus, redactPaths bool) RepoSnapshot {
 		HeadSHA:              status.HeadSHA,
 		IsDirty:              status.IsDirty,
 		IsClean:              status.IsClean,
+		IsEmpty:              status.IsEmpty,
 		Error:                status.Error,
 	}
 }

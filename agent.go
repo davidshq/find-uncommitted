@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"sync"
 	"syscall"
@@ -20,6 +19,7 @@ type AgentConfig struct {
 	MachineID    string
 	Interval     time.Duration
 	TickTimeout  time.Duration
+	MaxWorkers   int
 	RedactPaths  bool
 	DirtyOnly    bool
 	Sync         SyncConfig
@@ -201,7 +201,7 @@ func smokePublishOnce(cfg AgentConfig) (string, error) {
 func publishAgentSnapshot(ctx context.Context, cfg AgentConfig) (MachineSnapshot, bool, error) {
 	started := time.Now()
 	repos := findGitRepos(cfg.ScanRoot, cfg.StateRepoDir)
-	results := checkRepoStatuses(ctx, repos, cfg.DirtyOnly)
+	results := checkRepoStatuses(ctx, repos, cfg.DirtyOnly, cfg.MaxWorkers)
 	if err := ctx.Err(); err != nil {
 		return MachineSnapshot{}, false, fmt.Errorf("agent scan cancelled: %w", err)
 	}
@@ -211,18 +211,12 @@ func publishAgentSnapshot(ctx context.Context, cfg AgentConfig) (MachineSnapshot
 }
 
 // checkRepoStatuses checks each repo path concurrently and optionally filters clean repos.
-func checkRepoStatuses(ctx context.Context, repos []string, dirtyOnlyFilter bool) []RepoStatus {
+func checkRepoStatuses(ctx context.Context, repos []string, dirtyOnlyFilter bool, maxWorkers int) []RepoStatus {
 	if len(repos) == 0 {
 		return nil
 	}
 
-	maxWorkers := runtime.NumCPU() * 4
-	if maxWorkers < 4 {
-		maxWorkers = 4
-	}
-	if maxWorkers > len(repos) {
-		maxWorkers = len(repos)
-	}
+	maxWorkers = repoCheckWorkerCount(maxWorkers, len(repos))
 
 	jobs := make(chan string)
 	statusChan := make(chan RepoStatus, len(repos))

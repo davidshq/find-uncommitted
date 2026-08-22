@@ -29,7 +29,7 @@ func TestCheckRepoStatusesSortsByPath(t *testing.T) {
 		filepath.Join("a", "repo"),
 		filepath.Join("m", "repo"),
 	}
-	results := checkRepoStatuses(ctx, repos, false)
+	results := checkRepoStatuses(ctx, repos, false, 0)
 	if len(results) != 3 {
 		t.Fatalf("expected 3 results, got %d", len(results))
 	}

@@ -34,6 +34,7 @@ type RepoStatus struct {
 	Branch               string
 	IsDirty              bool
 	IsClean              bool
+	IsEmpty              bool // git init with no commits yet
 	Error                string
 }
 
@@ -54,6 +55,7 @@ func main() {
 		uninstallSched bool
 		redactPaths    bool
 		skipRemote     bool
+		maxWorkers     int
 	)
 
 	flag.BoolVar(&debugMode, "debug", false, "Enable debug output")
@@ -70,6 +72,7 @@ func main() {
 	flag.BoolVar(&uninstallSched, "uninstall-scheduler", false, "Remove OS scheduler registration")
 	flag.BoolVar(&redactPaths, "redact-paths", false, "Redact full paths in published snapshots (keep basename)")
 	flag.BoolVar(&skipRemote, "no-remote", false, "Skip loading other machines' snapshots even if state repo is configured")
+	flag.IntVar(&maxWorkers, "max-workers", 0, fmt.Sprintf("Max parallel repo checks (default %d; 0 = default)", DefaultMaxWorkers))
 	flag.Parse()
 
 	if uninstallSched {
@@ -118,6 +121,8 @@ func main() {
 		StaleTTLSet:    flagSet["stale-ttl"],
 		RedactPaths:    redactPaths,
 		RedactPathsSet: flagSet["redact-paths"],
+		MaxWorkers:     maxWorkers,
+		MaxWorkersSet:  flagSet["max-workers"],
 	}, fileCfg, os.Getenv)
 
 	stateRepo = resolved.StateRepo
@@ -132,6 +137,7 @@ func main() {
 		staleTTLStr = resolved.StaleTTL
 	}
 	redactPaths = resolved.RedactPaths
+	maxWorkers = resolved.MaxWorkers
 
 	if machineID == "" {
 		host, err := os.Hostname()
@@ -196,7 +202,7 @@ func main() {
 		requireStateRepo(stateRepo, "--install-scheduler")
 		validateStateRepoOrExit(stateRepo)
 		if configPath != "" {
-			sticky := stickyConfigFromRun(stateRepo, rootDir, machineID, intervalStr, heartbeatStr, staleTTLStr, redactPaths)
+			sticky := stickyConfigFromRun(stateRepo, rootDir, machineID, intervalStr, heartbeatStr, staleTTLStr, redactPaths, resolvedMaxWorkers(maxWorkers))
 			if err := SaveUserConfig(configPath, sticky); err != nil {
 				fmt.Fprintf(os.Stderr, "Error writing sticky config: %v\n", err)
 				os.Exit(1)
@@ -211,7 +217,7 @@ func main() {
 		printSchedulerPrereqs()
 		// Smoke publish before OS registration so a broken state repo/credentials
 		// fails install loudly (and avoids racing Linux enable --now).
-		snapPath, err := smokePublishOnce(newAgentConfig(rootDir, stateRepo, machineID, interval, tickTimeout, redactPaths, heartbeat, false))
+		snapPath, err := smokePublishOnce(newAgentConfig(rootDir, stateRepo, machineID, interval, tickTimeout, maxWorkers, redactPaths, heartbeat, false))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: smoke publish failed (scheduler not installed): %v\n", err)
 			os.Exit(1)
@@ -239,7 +245,7 @@ func main() {
 			}
 		}
 		printPrivacyNotice()
-		err := RunAgentLoop(newAgentConfig(rootDir, stateRepo, machineID, interval, tickTimeout, redactPaths, heartbeat, false))
+		err := RunAgentLoop(newAgentConfig(rootDir, stateRepo, machineID, interval, tickTimeout, maxWorkers, redactPaths, heartbeat, false))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Agent error: %v\n", err)
 			os.Exit(1)
@@ -270,7 +276,7 @@ func main() {
 	// filters the Attention/inventory presentation instead.
 	willTryRemote := stateRepo != "" && !skipRemote
 	scanCtx := context.Background()
-	results := checkRepoStatuses(scanCtx, repos, dirtyOnly && !willTryRemote)
+	results := checkRepoStatuses(scanCtx, repos, dirtyOnly && !willTryRemote, maxWorkers)
 
 	var remote []LoadedSnapshot
 	remoteOK := false
@@ -460,19 +466,6 @@ func setGitCancelled(ctx context.Context, status *RepoStatus, err error) bool {
 	return false
 }
 
-func appendRepoCheckError(status *RepoStatus, err error, primary, followUp string) {
-	detail := primary
-	if status.Error != "" {
-		detail = followUp
-	}
-	fragment := fmt.Sprintf("%s: %v", detail, err)
-	if status.Error == "" {
-		status.Error = fragment
-	} else {
-		status.Error += "; " + fragment
-	}
-}
-
 func checkRepoStatus(ctx context.Context, repoPath string) RepoStatus {
 	status := RepoStatus{
 		Path: repoPath,
@@ -494,7 +487,7 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoStatus {
 			status.Error = "Git ownership issue - run: git config --global --add safe.directory " + strings.ReplaceAll(repoPath, "\\", "/")
 			return status
 		}
-		status.Error = "Not a valid git repository"
+		status.Error = invalidRepositoryError(stderr, err)
 		return status
 	}
 
@@ -514,79 +507,90 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoStatus {
 				return status
 			} else {
 				status.Branch = "detached HEAD"
-				status.Error = fmt.Sprintf("Branch issue: %v", err)
+				status.Error = fmt.Sprintf("Branch issue: %s", formatGitError(stderr, err))
 			}
 		} else {
-			_ = stderr
 			status.Branch = "unknown"
-			status.Error = fmt.Sprintf("Branch issue: %v", err)
+			status.Error = fmt.Sprintf("Branch issue: %s", formatGitError(stderr, err))
 		}
 		// Don't return here, continue checking other status
 	} else {
 		status.Branch = strings.TrimSpace(branch)
 	}
 
+	status.IsEmpty = repoIsEmpty(ctx, repoPath)
+
 	// Capture normalized origin for cross-machine project correlation.
 	status.Origin = repoOriginURL(ctx, repoPath)
 
 	// Check for unstaged changes
-	unstaged, _, err := runGit(ctx, repoPath, "diff", "--name-only")
+	unstaged, stderr, err := runGit(ctx, repoPath, "diff", "--name-only")
 	if err != nil {
 		if setGitCancelled(ctx, &status, err) {
 			return status
 		}
-		appendRepoCheckError(&status, err, "Failed to check unstaged changes", "unstaged check failed")
+		appendRepoCheckError(&status, stderr, err, "Failed to check unstaged changes", "unstaged check failed")
 		return status
 	}
 	status.HasUnstaged = len(strings.TrimSpace(unstaged)) > 0
 
 	// Check for staged changes
-	staged, _, err := runGit(ctx, repoPath, "diff", "--cached", "--name-only")
+	staged, stderr, err := runGit(ctx, repoPath, "diff", "--cached", "--name-only")
 	if err != nil {
 		if setGitCancelled(ctx, &status, err) {
 			return status
 		}
-		appendRepoCheckError(&status, err, "Failed to check staged changes", "staged check failed")
+		appendRepoCheckError(&status, stderr, err, "Failed to check staged changes", "staged check failed")
 		return status
 	}
 	status.HasStaged = len(strings.TrimSpace(staged)) > 0
 
 	// Check for untracked files
-	untracked, _, err := runGit(ctx, repoPath, "ls-files", "--others", "--exclude-standard")
+	untracked, stderr, err := runGit(ctx, repoPath, "ls-files", "--others", "--exclude-standard")
 	if err != nil {
 		if setGitCancelled(ctx, &status, err) {
 			return status
 		}
-		appendRepoCheckError(&status, err, "Failed to check untracked files", "untracked check failed")
+		appendRepoCheckError(&status, stderr, err, "Failed to check untracked files", "untracked check failed")
 		return status
 	}
 	status.HasUntracked = len(strings.TrimSpace(untracked)) > 0
 
-	// Determine upstream tracking status first.
-	_, upStderr, upstreamErr := runGit(ctx, repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
-	if upstreamErr != nil {
-		if setGitCancelled(ctx, &status, upstreamErr) {
-			return status
-		}
-		errOutput := strings.ToLower(upStderr + upstreamErr.Error())
-		if strings.Contains(errOutput, "no upstream configured") {
-			status.HasUntrackedUpstream = true
-		} else {
-			status.Error = fmt.Sprintf("Failed to check upstream tracking: %v", upstreamErr)
-		}
+	if status.IsEmpty {
+		status.HeadSHA = ""
 	} else {
-		// Ahead/behind against cached upstream refs only (no fetch).
-		status.AheadCount = revListCount(ctx, repoPath, "@{u}..HEAD")
-		status.BehindCount = revListCount(ctx, repoPath, "HEAD..@{u}")
-		status.HasUnpushed = status.AheadCount > 0
-		status.HasBehind = status.BehindCount > 0
+		status.HeadSHA = shortHeadSHA(ctx, repoPath)
 	}
 
-	status.HeadSHA = shortHeadSHA(ctx, repoPath)
+	// Upstream tracking (skip for empty repositories).
+	if !status.IsEmpty {
+		_, upStderr, upstreamErr := runGit(ctx, repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+		if upstreamErr != nil {
+			if setGitCancelled(ctx, &status, upstreamErr) {
+				return status
+			}
+			if isEmptyRepositoryMessage(upStderr, upstreamErr) {
+				status.IsEmpty = true
+			} else {
+				untrackedUpstream, repoErr := classifyUpstreamFailure(upStderr, upstreamErr)
+				if repoErr != "" {
+					status.Error = repoErr
+				} else if untrackedUpstream {
+					status.HasUntrackedUpstream = true
+				}
+			}
+		} else {
+			// Ahead/behind against cached upstream refs only (no fetch).
+			status.AheadCount = revListCount(ctx, repoPath, "@{u}..HEAD")
+			status.BehindCount = revListCount(ctx, repoPath, "HEAD..@{u}")
+			status.HasUnpushed = status.AheadCount > 0
+			status.HasBehind = status.BehindCount > 0
+		}
+	}
 
 	// Dirty means working tree changes only.
 	status.IsDirty = status.HasUnstaged || status.HasStaged || status.HasUntracked
-	status.IsClean = !status.IsDirty && !status.HasUnpushed && !status.HasBehind && !status.HasUntrackedUpstream
+	status.IsClean = status.Error == "" && !status.IsDirty && !status.HasUnpushed && !status.HasBehind && !status.HasUntrackedUpstream
 
 	return status
 }

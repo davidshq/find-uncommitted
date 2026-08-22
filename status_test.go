@@ -94,6 +94,20 @@ func TestRepoStatusText(t *testing.T) {
 			wantStatus: "Clean",
 			wantChange: "-",
 		},
+		{
+			name:       "empty emoji",
+			repo:       RepoSnapshot{IsEmpty: true},
+			plain:      false,
+			wantStatus: "📭 Empty",
+			wantChange: "no commits yet",
+		},
+		{
+			name:       "empty plain",
+			repo:       RepoSnapshot{IsEmpty: true},
+			plain:      true,
+			wantStatus: "Empty",
+			wantChange: "no commits yet",
+		},
 	}
 
 	for _, tt := range tests {
@@ -139,6 +153,12 @@ func TestNeedsAttentionEquivalent(t *testing.T) {
 			status: RepoStatus{Error: "boom"},
 			snap:   RepoSnapshot{Error: "boom"},
 			want:   true,
+		},
+		{
+			name:   "empty",
+			status: RepoStatus{IsEmpty: true},
+			snap:   RepoSnapshot{IsEmpty: true},
+			want:   false,
 		},
 	}
 

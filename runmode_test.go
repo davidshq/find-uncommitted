@@ -32,11 +32,11 @@ func TestShouldPersistStableMachineID(t *testing.T) {
 }
 
 func TestNewAgentConfig(t *testing.T) {
-	cfg := newAgentConfig("/scan", "/state", "box", 2*time.Minute, 3*time.Minute, true, 15*time.Minute, false)
+	cfg := newAgentConfig("/scan", "/state", "box", 2*time.Minute, 3*time.Minute, 8, true, 15*time.Minute, false)
 	if cfg.ScanRoot != "/scan" || cfg.StateRepoDir != "/state" || cfg.MachineID != "box" {
 		t.Fatalf("unexpected top-level fields: %+v", cfg)
 	}
-	if cfg.Interval != 2*time.Minute || cfg.TickTimeout != 3*time.Minute || !cfg.RedactPaths || cfg.DirtyOnly {
+	if cfg.Interval != 2*time.Minute || cfg.TickTimeout != 3*time.Minute || cfg.MaxWorkers != 8 || !cfg.RedactPaths || cfg.DirtyOnly {
 		t.Fatalf("unexpected cadence/redact/dirty: %+v", cfg)
 	}
 	if cfg.Sync.StateRepoDir != "/state" || cfg.Sync.MachineID != "box" || cfg.Sync.Heartbeat != 15*time.Minute {
@@ -45,11 +45,11 @@ func TestNewAgentConfig(t *testing.T) {
 }
 
 func TestStickyConfigFromRun(t *testing.T) {
-	cfg := stickyConfigFromRun("/state", "/scan", "m1", "2m", "15m", "30m", true)
+	cfg := stickyConfigFromRun("/state", "/scan", "m1", "2m", "15m", "30m", true, 8)
 	if cfg.StateRepo != "/state" || cfg.ScanRoot != "/scan" || cfg.MachineID != "m1" {
 		t.Fatalf("unexpected paths/id: %+v", cfg)
 	}
-	if cfg.Interval != "2m" || cfg.Heartbeat != "15m" || cfg.StaleTTL != "30m" || !cfg.RedactPaths {
-		t.Fatalf("unexpected cadence/redact: %+v", cfg)
+	if cfg.Interval != "2m" || cfg.Heartbeat != "15m" || cfg.StaleTTL != "30m" || !cfg.RedactPaths || cfg.MaxWorkers != 8 {
+		t.Fatalf("unexpected cadence/redact/workers: %+v", cfg)
 	}
 }

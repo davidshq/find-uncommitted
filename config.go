@@ -24,6 +24,7 @@ const (
 	envHeartbeat   = "FIND_UNCOMMITTED_HEARTBEAT"
 	envStaleTTL    = "FIND_UNCOMMITTED_STALE_TTL"
 	envRedactPaths = "FIND_UNCOMMITTED_REDACT_PATHS"
+	envMaxWorkers  = "FIND_UNCOMMITTED_MAX_WORKERS"
 )
 
 // UserConfig is the sticky TOML settings shared by CLI and agent.
@@ -35,6 +36,7 @@ type UserConfig struct {
 	Heartbeat   string `toml:"heartbeat,omitempty"`
 	StaleTTL    string `toml:"stale_ttl,omitempty"`
 	RedactPaths bool   `toml:"redact_paths,omitempty"`
+	MaxWorkers  int    `toml:"max_workers,omitempty"`
 }
 
 // ConfigSource identifies where a resolved value came from.
@@ -63,6 +65,8 @@ type FlagOverrides struct {
 	StaleTTLSet    bool
 	RedactPaths    bool
 	RedactPathsSet bool
+	MaxWorkers     int
+	MaxWorkersSet  bool
 }
 
 // ResolvedSettings is the effective configuration after precedence resolution.
@@ -81,6 +85,8 @@ type ResolvedSettings struct {
 	StaleTTLSource    ConfigSource
 	RedactPaths       bool
 	RedactPathsSource ConfigSource
+	MaxWorkers        int
+	MaxWorkersSource  ConfigSource
 }
 
 // DefaultConfigPath returns the platform user config file path.
@@ -164,6 +170,8 @@ func ResolveSettings(flags FlagOverrides, file UserConfig, getenv func(string) s
 		out.RedactPathsSource = SourceConfig
 	}
 
+	out.MaxWorkers, out.MaxWorkersSource = resolveInt(flags.MaxWorkers, flags.MaxWorkersSet, getenv(envMaxWorkers), file.MaxWorkers)
+
 	return out
 }
 
@@ -182,6 +190,21 @@ func resolveString(flagVal string, flagSet bool, envVal, fileVal string) (string
 		return file, SourceConfig
 	}
 	return "", SourceNone
+}
+
+func resolveInt(flagVal int, flagSet bool, envVal string, fileVal int) (int, ConfigSource) {
+	if flagSet && flagVal > 0 {
+		return flagVal, SourceFlag
+	}
+	if env := strings.TrimSpace(envVal); env != "" {
+		if n, err := strconv.Atoi(env); err == nil && n > 0 {
+			return n, SourceEnv
+		}
+	}
+	if fileVal > 0 {
+		return fileVal, SourceConfig
+	}
+	return 0, SourceNone
 }
 
 func parseBoolEnv(v string) (bool, bool) {

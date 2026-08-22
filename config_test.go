@@ -167,6 +167,36 @@ func TestResolveRedactPaths(t *testing.T) {
 	}
 }
 
+func TestResolveMaxWorkers(t *testing.T) {
+	file := UserConfig{MaxWorkers: 6}
+	getenv := func(k string) string {
+		if k == envMaxWorkers {
+			return "12"
+		}
+		return ""
+	}
+
+	res := ResolveSettings(FlagOverrides{MaxWorkers: 4, MaxWorkersSet: true}, file, getenv)
+	if res.MaxWorkers != 4 || res.MaxWorkersSource != SourceFlag {
+		t.Fatalf("max_workers flag: got %d (%s)", res.MaxWorkers, res.MaxWorkersSource)
+	}
+
+	res = ResolveSettings(FlagOverrides{}, file, getenv)
+	if res.MaxWorkers != 12 || res.MaxWorkersSource != SourceEnv {
+		t.Fatalf("max_workers env: got %d (%s)", res.MaxWorkers, res.MaxWorkersSource)
+	}
+
+	res = ResolveSettings(FlagOverrides{}, file, func(string) string { return "" })
+	if res.MaxWorkers != 6 || res.MaxWorkersSource != SourceConfig {
+		t.Fatalf("max_workers file: got %d (%s)", res.MaxWorkers, res.MaxWorkersSource)
+	}
+
+	res = ResolveSettings(FlagOverrides{}, UserConfig{}, func(string) string { return "" })
+	if res.MaxWorkers != 0 || res.MaxWorkersSource != SourceNone {
+		t.Fatalf("max_workers unset: got %d (%s)", res.MaxWorkers, res.MaxWorkersSource)
+	}
+}
+
 func TestEnsureConfigFromAgent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

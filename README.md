@@ -104,6 +104,7 @@ interval = "2m"       # how often to check (scan + publish decision)
 heartbeat = "15m"     # liveness commit when status is unchanged
 stale_ttl = "30m"     # mark remote snapshots stale after this (keep ≈ 2× heartbeat)
 redact_paths = false
+max_workers = 8       # parallel repo checks (default 8)
 ```
 
 To restore the older aggressive profile (frequent checks + chatty heartbeats):
@@ -116,7 +117,7 @@ stale_ttl = "5m"
 
 **Precedence:** CLI flags > environment variables > config file > built-in defaults.
 
-Useful env vars: `FIND_UNCOMMITTED_STATE_REPO`, `FIND_UNCOMMITTED_SCAN_ROOT`, `FIND_UNCOMMITTED_MACHINE_ID`, `FIND_UNCOMMITTED_INTERVAL`, `FIND_UNCOMMITTED_HEARTBEAT`, `FIND_UNCOMMITTED_STALE_TTL`, `FIND_UNCOMMITTED_REDACT_PATHS`.
+Useful env vars: `FIND_UNCOMMITTED_STATE_REPO`, `FIND_UNCOMMITTED_SCAN_ROOT`, `FIND_UNCOMMITTED_MACHINE_ID`, `FIND_UNCOMMITTED_INTERVAL`, `FIND_UNCOMMITTED_HEARTBEAT`, `FIND_UNCOMMITTED_STALE_TTL`, `FIND_UNCOMMITTED_REDACT_PATHS`, `FIND_UNCOMMITTED_MAX_WORKERS`.
 
 When config supplies `state_repo`, the CLI prints a short stderr notice and aggregates remotes. Use `--no-remote` for a local-only scan. If the configured state clone path is missing or invalid, the scan **exits with an error** (so a bad sticky config cannot silently look like a local-only machine). If the clone is valid but offline/`git pull` fails, the tool warns and still shows local results plus any on-disk snapshots. Corrupt individual snapshot JSON files are skipped with a stderr warning; valid siblings still appear in the aggregate.
 
@@ -197,6 +198,7 @@ Useful flags:
 | `--heartbeat` | Liveness commit when status unchanged (default `15m`) |
 | `--stale-ttl` | Staleness threshold (default `30m`; keep ≈ 2× `heartbeat`) |
 | `--tick-timeout` | Per-tick deadline for pull, scan, and publish (default `2m`) |
+| `--max-workers` | Max parallel repo checks (default `8`) |
 | `--machine-id` | Override hostname-based machine id |
 | `--redact-paths` | Publish basename-only paths |
 | `--no-remote` | Local scan only even if a state repo is configured |
@@ -389,8 +391,9 @@ cd ..
 ## Performance Notes
 
 - The application skips common system directories and build folders to improve scanning speed
-- Concurrent processing means checking many repositories won't take proportionally longer
-- Large drives may take several minutes to scan completely
+- Repo status checks run in parallel, capped at **8 workers** by default (`max_workers` in sticky config, `--max-workers`, or `FIND_UNCOMMITTED_MAX_WORKERS`) to avoid overloading git and the filesystem
+- Each git subprocess has a **30s** deadline; under heavy load a repo may report `git timed out or cancelled` instead of a false "invalid repository" error
+- Large scan roots may take several minutes to scan completely
 - Debug mode adds output but may slow down processing slightly
 
 ## Troubleshooting
@@ -402,4 +405,12 @@ Use the `--debug` flag to see detailed information about directory scanning and 
 If you see ownership errors, run the fix-ownership tool first, then run the main tool again.
 
 ### Timing Issues
-If the fix-ownership tool doesn't seem to work immediately, try running it with the `--debug` flag or wait a few seconds before running the main tool again. 
+If the fix-ownership tool doesn't seem to work immediately, try running it with the `--debug` flag or wait a few seconds before running the main tool again.
+
+### Git timeouts under load
+If many repos are scanned at once (e.g. an entire `code` tree), you may see `git timed out or cancelled` on otherwise healthy repos. Lower parallelism with `max_workers = 4` in sticky config, narrow `scan_root`, or re-run the scan. Timeouts are not the same as broken repositories.
+
+### Git exit status 128 and error detail
+Git uses exit code **128** as a generic fatal error — it does not mean one specific problem (missing upstream, empty repo, corrupt `.git`, etc.). find-uncommitted includes git's stderr detail in repository errors when available (for example `no such branch` or `does not have any commits yet`) instead of showing only `exit status 128`.
+
+**Empty repositories** (`git init` with no commits yet) are shown as **Empty** in the inventory and do not produce a "fix local git error" Attention nudge. Repos with real git failures still appear as errors with the fatal message preserved. 

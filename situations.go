@@ -154,7 +154,7 @@ func detectGroupSituations(g ProjectGroup) []Situation {
 
 	if local != nil {
 		repo := local.Repo
-		if repo.Error != "" {
+		if repo.Error != "" && !repo.IsEmpty {
 			situations = append(situations, Situation{
 				Kind:         SituationLocalError,
 				ProjectKey:   g.Key,

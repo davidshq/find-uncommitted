@@ -97,7 +97,7 @@ Each scanned repository with a configured upstream SHALL report whether it is be
 - **THEN** the CLI loads it successfully and treats behind as false / SHA empty
 
 ### Requirement: Attention nudges for project situations
-When presenting results, the CLI SHALL print an Attention section before the full inventory. Attention entries SHALL suggest advisory verbs only and MUST NOT execute git mutations on user repositories. Situations SHALL include local error, local dirty, local unpushed, local behind, local untracked upstream, cross-machine branch mismatch, same-branch tip mismatch (via published short HEAD SHAs), other-machine dirty/unpushed while local is clean, and stale remote evidence when a remote attention-worthy row is stale and no stronger cue already qualifies staleness. The aggregate inventory SHALL group rows by project identity.
+When presenting results, the CLI SHALL print an Attention section before the full inventory. Attention entries SHALL suggest advisory verbs only and MUST NOT execute git mutations on user repositories. Situations SHALL include local error, local dirty, local unpushed, local behind, local untracked upstream, cross-machine branch mismatch, same-branch tip mismatch (via published short HEAD SHAs), other-machine dirty/unpushed while local is clean, and stale remote evidence when a remote attention-worthy row is stale and no stronger cue already qualifies staleness. The aggregate inventory SHALL group rows by project identity. Empty local repositories (no commits yet) SHALL NOT produce a local-error Attention nudge.
 
 #### Scenario: Attention precedes inventory
 - **WHEN** the CLI finishes a scan (local-only or aggregate)
@@ -106,6 +106,10 @@ When presenting results, the CLI SHALL print an Attention section before the ful
 #### Scenario: Local untracked upstream nudge
 - **WHEN** a local repository has no upstream tracking configured
 - **THEN** Attention includes a nudge to set upstream tracking
+
+#### Scenario: Empty repository no error nudge
+- **WHEN** a local repository has no commits yet
+- **THEN** Attention does not include a fix-local-git-error nudge for that project
 
 #### Scenario: Cross-machine branch mismatch nudge
 - **WHEN** the local clone and another machine's snapshot for the same origin report different branch names

@@ -1,10 +1,4 @@
-# git-command-timeouts Specification
-
-## Purpose
-
-Bound every git subprocess used for repository scanning and state-repository sync with cancellable contexts and deadlines so hung credential prompts or stuck network git cannot block the agent or interactive scans indefinitely.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Context-deadline git subprocesses
 The system SHALL execute every git subprocess used for repository scanning and state-repository sync via a cancellable context with a per-command deadline. When the deadline expires or the parent context is cancelled, the system SHALL terminate the subprocess and return an error rather than blocking indefinitely. Non-interactive git invocations SHALL disable terminal credential prompts so credential waits fail instead of hanging on a TTY. Timeout and cancellation failures SHALL be reported distinctly from generic git fatal errors and MUST NOT be relabeled as invalid-repository or upstream-configuration failures.

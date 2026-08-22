@@ -127,3 +127,43 @@ func TestSyncWarningUnwrapsContext(t *testing.T) {
 		t.Fatal("isGitContextErr should detect wrapped deadline")
 	}
 }
+
+func TestIsGitContextErrWaitDelay(t *testing.T) {
+	if !isGitContextErr(context.Background(), exec.ErrWaitDelay) {
+		t.Fatal("exec.ErrWaitDelay should be treated as timeout")
+	}
+}
+
+func TestSetGitCancelledWaitDelayNotInvalidRepo(t *testing.T) {
+	st := RepoStatus{}
+	if !setGitCancelled(context.Background(), &st, exec.ErrWaitDelay) {
+		t.Fatal("expected WaitDelay to be classified as timeout")
+	}
+	if strings.Contains(st.Error, "Not a valid git repository") {
+		t.Fatalf("WaitDelay must not be reported as invalid repo: %q", st.Error)
+	}
+	if !strings.Contains(st.Error, "timed out") {
+		t.Fatalf("expected timeout wording, got %q", st.Error)
+	}
+}
+
+func TestResolvedMaxWorkers(t *testing.T) {
+	if got := resolvedMaxWorkers(0); got != DefaultMaxWorkers {
+		t.Fatalf("default workers = %d, want %d", got, DefaultMaxWorkers)
+	}
+	if got := resolvedMaxWorkers(4); got != 4 {
+		t.Fatalf("explicit workers = %d, want 4", got)
+	}
+}
+
+func TestRepoCheckWorkerCount(t *testing.T) {
+	if got := repoCheckWorkerCount(0, 100); got != DefaultMaxWorkers {
+		t.Fatalf("default workers = %d, want %d", got, DefaultMaxWorkers)
+	}
+	if got := repoCheckWorkerCount(4, 100); got != 4 {
+		t.Fatalf("explicit workers = %d, want 4", got)
+	}
+	if got := repoCheckWorkerCount(20, 5); got != 5 {
+		t.Fatalf("workers capped to repo count = %d, want 5", got)
+	}
+}
