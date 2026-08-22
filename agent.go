@@ -243,11 +243,3 @@ func checkRepoStatuses(ctx context.Context, repos []string, dirtyOnlyFilter bool
 	}
 	return results
 }
-
-func repoNeedsAttention(status RepoStatus) bool {
-	return status.Error != "" || status.IsDirty || status.HasUnpushed || status.HasBehind || status.HasUntrackedUpstream
-}
-
-func snapshotNeedsAttention(repo RepoSnapshot) bool {
-	return repo.Error != "" || repo.IsDirty || repo.HasUnpushed || repo.HasBehind || repo.HasUntrackedUpstream
-}

@@ -94,7 +94,7 @@ func displayAggregateTable(rows []AggregateRow, dirtyOnlyFilter bool) {
 	for _, g := range GroupRowsByProject(rows) {
 		fmt.Printf("\n%s\n", g.Label)
 		for _, row := range g.Rows {
-			statusText, changesText := repoSnapshotStatusText(row.Repo)
+			statusText, changesText := repoStatusText(row.Repo, false)
 			if dirtyOnlyFilter && !snapshotNeedsAttention(row.Repo) {
 				continue
 			}
@@ -125,59 +125,6 @@ func displayAggregateTable(rows []AggregateRow, dirtyOnlyFilter bool) {
 	if shown == 0 {
 		fmt.Println("(no repositories to display)")
 	}
-}
-
-func repoSnapshotStatusText(repo RepoSnapshot) (statusText, changesText string) {
-	if repo.Error != "" {
-		return "❌ Error", repo.Error
-	}
-	if repo.IsDirty {
-		return "⚠️  Dirty", strings.Join(snapshotChangesText(repo), ", ")
-	}
-	if repo.HasUntrackedUpstream {
-		return "🔗 Untracked Upstream", "untracked-upstream"
-	}
-	if repo.HasBehind && repo.HasUnpushed {
-		return "↕️ Diverged", strings.Join(snapshotChangesText(repo), ", ")
-	}
-	if repo.HasBehind {
-		return "⬇️ Behind", strings.Join(snapshotChangesText(repo), ", ")
-	}
-	if repo.HasUnpushed {
-		return "⬆️ Unpushed", strings.Join(snapshotChangesText(repo), ", ")
-	}
-	return "✅ Clean", "-"
-}
-
-func snapshotChangesText(repo RepoSnapshot) []string {
-	var changes []string
-	if repo.HasUnstaged {
-		changes = append(changes, "unstaged")
-	}
-	if repo.HasStaged {
-		changes = append(changes, "staged")
-	}
-	if repo.HasUntracked {
-		changes = append(changes, "untracked")
-	}
-	if repo.HasUnpushed {
-		if repo.AheadCount > 0 {
-			changes = append(changes, fmt.Sprintf("unpushed:%d", repo.AheadCount))
-		} else {
-			changes = append(changes, "unpushed")
-		}
-	}
-	if repo.HasBehind {
-		if repo.BehindCount > 0 {
-			changes = append(changes, fmt.Sprintf("behind:%d", repo.BehindCount))
-		} else {
-			changes = append(changes, "behind")
-		}
-	}
-	if repo.HasUntrackedUpstream {
-		changes = append(changes, "untracked-upstream")
-	}
-	return changes
 }
 
 func displayPath(wd, path string) string {
@@ -269,7 +216,7 @@ func exportAggregateToCSV(rows []AggregateRow, filename string, dirtyOnlyFilter 
 		if dirtyOnlyFilter && !snapshotNeedsAttention(row.Repo) {
 			continue
 		}
-		statusText, changesText := repoSnapshotStatusTextPlain(row.Repo)
+		statusText, changesText := repoStatusText(row.Repo, true)
 		if err := writer.Write([]string{
 			row.Machine,
 			fmt.Sprintf("%t", row.Local),
@@ -284,26 +231,4 @@ func exportAggregateToCSV(rows []AggregateRow, filename string, dirtyOnlyFilter 
 		}
 	}
 	return nil
-}
-
-func repoSnapshotStatusTextPlain(repo RepoSnapshot) (statusText, changesText string) {
-	if repo.Error != "" {
-		return "Error", repo.Error
-	}
-	if repo.IsDirty {
-		return "Dirty", strings.Join(snapshotChangesText(repo), ", ")
-	}
-	if repo.HasUntrackedUpstream {
-		return "UntrackedUpstream", "untracked-upstream"
-	}
-	if repo.HasBehind && repo.HasUnpushed {
-		return "Diverged", strings.Join(snapshotChangesText(repo), ", ")
-	}
-	if repo.HasBehind {
-		return "Behind", strings.Join(snapshotChangesText(repo), ", ")
-	}
-	if repo.HasUnpushed {
-		return "Unpushed", strings.Join(snapshotChangesText(repo), ", ")
-	}
-	return "Clean", "-"
 }

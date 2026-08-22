@@ -104,15 +104,10 @@ func projectLabel(repo RepoSnapshot) string {
 		}
 		return o
 	}
-	base := filepath.Base(repo.Path)
-	parent := filepath.Base(filepath.Dir(repo.Path))
-	if base == "" || base == "." || base == string(filepath.Separator) || base == "…" {
-		return repo.Path
+	if id := pathBasenameIdentity(repo.Path); id != "" {
+		return id
 	}
-	if parent != "" && parent != "." && parent != string(filepath.Separator) && parent != "…" {
-		return parent + "/" + base
-	}
-	return base
+	return repo.Path
 }
 
 // DetectSituations builds soft-advice cues from project-grouped aggregate rows.

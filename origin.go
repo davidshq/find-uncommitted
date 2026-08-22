@@ -97,6 +97,20 @@ func redactOrigin(origin string) string {
 	return fmt.Sprintf("redacted:%x", sum[:8])
 }
 
+// pathBasenameIdentity returns parent/base for repos without origin correlation.
+// Empty means the path cannot be identified from basename alone.
+func pathBasenameIdentity(path string) string {
+	base := filepath.Base(path)
+	if base == "" || base == "." || base == string(filepath.Separator) || base == "…" {
+		return ""
+	}
+	parent := filepath.Base(filepath.Dir(path))
+	if parent != "" && parent != "." && parent != string(filepath.Separator) && parent != "…" {
+		return parent + "/" + base
+	}
+	return base
+}
+
 // repoCorrelationKey is the stable identity used to match one project across
 // machines. Prefer normalized origin; for local-only repos fall back to
 // parent/basename (e.g. manuscripts/book) so same-named folders under different
@@ -105,13 +119,8 @@ func repoCorrelationKey(repo RepoSnapshot) string {
 	if o := strings.TrimSpace(repo.Origin); o != "" {
 		return "origin:" + o
 	}
-	base := filepath.Base(repo.Path)
-	if base == "" || base == "." || base == string(filepath.Separator) || base == "…" {
-		return "path:" + repo.Path
+	if id := pathBasenameIdentity(repo.Path); id != "" {
+		return "basename:" + id
 	}
-	parent := filepath.Base(filepath.Dir(repo.Path))
-	if parent != "" && parent != "." && parent != string(filepath.Separator) && parent != "…" {
-		return "basename:" + parent + "/" + base
-	}
-	return "basename:" + base
+	return "path:" + repo.Path
 }

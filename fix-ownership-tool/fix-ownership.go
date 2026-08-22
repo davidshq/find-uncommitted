@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
+
+	"find-uncommitted/internal/discover"
 )
 
 var debugMode bool
@@ -27,7 +28,7 @@ func main() {
 	fmt.Println("This will automatically fix ownership issues...")
 	fmt.Println()
 
-	repos := findGitRepos(rootDir)
+	repos := discover.FindGitRepos(rootDir, discover.WalkOptions{Debug: debugMode})
 
 	if len(repos) == 0 {
 		fmt.Println("No git repositories found.")
@@ -54,59 +55,6 @@ func main() {
 	fmt.Printf("\nFixed ownership for %d repositories.\n", fixedCount)
 }
 
-func findGitRepos(rootDir string) []string {
-	var repos []string
-
-	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			if debugMode {
-				fmt.Printf("[DEBUG] Skipping (error accessing): %s\n", path)
-			}
-			return nil
-		}
-
-		if info.IsDir() {
-			if debugMode {
-				fmt.Printf("[DEBUG] Visiting: %s\n", path)
-			}
-
-			// Check if this is a .git directory FIRST
-			if filepath.Base(path) == ".git" {
-				if debugMode {
-					fmt.Printf("[DEBUG] Found .git directory: %s\n", path)
-				}
-				repoPath := filepath.Dir(path)
-				repos = append(repos, repoPath)
-				return filepath.SkipDir
-			}
-
-			// Then check if directory should be skipped
-			base := filepath.Base(path)
-			if strings.HasPrefix(base, ".") ||
-				base == "node_modules" ||
-				base == "vendor" ||
-				base == "bin" ||
-				base == "obj" ||
-				strings.Contains(path, "\\Windows\\") ||
-				strings.Contains(path, "\\Program Files\\") ||
-				strings.Contains(path, "\\Program Files (x86)\\") {
-				if debugMode {
-					fmt.Printf("[DEBUG] Skipping directory: %s\n", path)
-				}
-				return filepath.SkipDir
-			}
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		fmt.Printf("Error scanning directory: %v\n", err)
-	}
-
-	return repos
-}
-
 func hasOwnershipIssue(repoPath string) bool {
 	_, err := exec.Command("git", "-C", repoPath, "rev-parse", "--git-dir").Output()
 	if err != nil {
@@ -119,10 +67,8 @@ func hasOwnershipIssue(repoPath string) bool {
 }
 
 func fixOwnership(repoPath string) bool {
-	// Convert Windows path to forward slashes for git
 	gitPath := strings.ReplaceAll(repoPath, "\\", "/")
 
-	// Avoid adding duplicate safe.directory entries.
 	existing, err := exec.Command("git", "config", "--global", "--get-all", "safe.directory").Output()
 	if err == nil {
 		for _, line := range strings.Split(strings.ReplaceAll(string(existing), "\r\n", "\n"), "\n") {

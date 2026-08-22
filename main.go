@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"find-uncommitted/internal/discover"
 )
 
 // RepoStatus is the live scan result for one local git repository.
@@ -139,28 +141,24 @@ func main() {
 		machineID = host
 	}
 
-	interval, err := time.ParseDuration(intervalStr)
+	interval, err := parseDurationFlag("--interval", intervalStr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Invalid --interval: %v\n", err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	heartbeat, err := time.ParseDuration(heartbeatStr)
+	heartbeat, err := parseDurationFlag("heartbeat", heartbeatStr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Invalid heartbeat: %v\n", err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	staleTTL, err := time.ParseDuration(staleTTLStr)
+	staleTTL, err := parseDurationFlag("--stale-ttl", staleTTLStr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Invalid --stale-ttl: %v\n", err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	tickTimeout, err := time.ParseDuration(tickTimeoutStr)
+	tickTimeout, err := parsePositiveDurationFlag("--tick-timeout", tickTimeoutStr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Invalid --tick-timeout: %v\n", err)
-		os.Exit(1)
-	}
-	if tickTimeout <= 0 {
-		fmt.Fprintln(os.Stderr, "Invalid --tick-timeout: must be positive")
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	if stateRepo != "" {
@@ -476,86 +474,35 @@ func printSummary(results []RepoStatus) {
 }
 
 func findGitRepos(rootDir string, excludeRepos ...string) []string {
-	var repos []string
-	excludes := make([]string, 0, len(excludeRepos))
-	for _, e := range excludeRepos {
-		if e == "" {
-			continue
-		}
-		abs, err := filepath.Abs(e)
-		if err != nil {
-			abs = filepath.Clean(e)
-		}
-		excludes = append(excludes, abs)
-	}
-
-	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			if debugMode {
-				fmt.Printf("[DEBUG] Skipping (error accessing): %s\n", path)
-			}
-			return nil
-		}
-
-		if info.IsDir() {
-			if debugMode {
-				fmt.Printf("[DEBUG] Visiting: %s\n", path)
-			}
-
-			// Check if this is a .git directory FIRST
-			if filepath.Base(path) == ".git" {
-				if debugMode {
-					fmt.Printf("[DEBUG] Found .git directory: %s\n", path)
-				}
-				repoPath := filepath.Dir(path)
-				if shouldExcludeRepo(repoPath, excludes) {
-					if debugMode {
-						fmt.Printf("[DEBUG] Excluding state/sync repo: %s\n", repoPath)
-					}
-					return filepath.SkipDir
-				}
-				repos = append(repos, repoPath)
-				return filepath.SkipDir
-			}
-
-			// Then check if directory should be skipped
-			base := filepath.Base(path)
-			if strings.HasPrefix(base, ".") ||
-				base == "node_modules" ||
-				base == "vendor" ||
-				base == "bin" ||
-				base == "obj" ||
-				strings.Contains(path, "\\Windows\\") ||
-				strings.Contains(path, "\\Program Files\\") ||
-				strings.Contains(path, "\\Program Files (x86)\\") {
-				if debugMode {
-					fmt.Printf("[DEBUG] Skipping directory: %s\n", path)
-				}
-				return filepath.SkipDir
-			}
-		}
-
-		return nil
+	return discover.FindGitRepos(rootDir, discover.WalkOptions{
+		Debug:    debugMode,
+		Excludes: excludeRepos,
 	})
-
-	if err != nil {
-		fmt.Printf("Error scanning directory: %v\n", err)
-	}
-
-	return repos
 }
 
-func shouldExcludeRepo(repoPath string, excludes []string) bool {
-	abs, err := filepath.Abs(repoPath)
-	if err != nil {
-		abs = filepath.Clean(repoPath)
-	}
-	for _, ex := range excludes {
-		if abs == ex {
-			return true
-		}
+func gitCancelledError(err error) string {
+	return fmt.Sprintf("git timed out or cancelled: %v", err)
+}
+
+func setGitCancelled(ctx context.Context, status *RepoStatus, err error) bool {
+	if isGitContextErr(ctx, err) {
+		status.Error = gitCancelledError(err)
+		return true
 	}
 	return false
+}
+
+func appendRepoCheckError(status *RepoStatus, err error, primary, followUp string) {
+	detail := primary
+	if status.Error != "" {
+		detail = followUp
+	}
+	fragment := fmt.Sprintf("%s: %v", detail, err)
+	if status.Error == "" {
+		status.Error = fragment
+	} else {
+		status.Error += "; " + fragment
+	}
 }
 
 func checkRepoStatus(ctx context.Context, repoPath string) RepoStatus {
@@ -571,8 +518,7 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoStatus {
 	// First check if this is a valid git repository
 	_, stderr, err := runGit(ctx, repoPath, "rev-parse", "--git-dir")
 	if err != nil {
-		if isGitContextErr(ctx, err) {
-			status.Error = fmt.Sprintf("git timed out or cancelled: %v", err)
+		if setGitCancelled(ctx, &status, err) {
 			return status
 		}
 		// Check if it's a dubious ownership error
@@ -587,8 +533,7 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoStatus {
 	// Get current branch
 	branch, stderr, err := runGit(ctx, repoPath, "branch", "--show-current")
 	if err != nil {
-		if isGitContextErr(ctx, err) {
-			status.Error = fmt.Sprintf("git timed out or cancelled: %v", err)
+		if setGitCancelled(ctx, &status, err) {
 			return status
 		}
 		// Check if it's a detached HEAD state (exit code 1)
@@ -597,8 +542,7 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoStatus {
 			commit, _, commitErr := runGit(ctx, repoPath, "rev-parse", "--short", "HEAD")
 			if commitErr == nil {
 				status.Branch = fmt.Sprintf("detached HEAD (%s)", strings.TrimSpace(commit))
-			} else if isGitContextErr(ctx, commitErr) {
-				status.Error = fmt.Sprintf("git timed out or cancelled: %v", commitErr)
+			} else if setGitCancelled(ctx, &status, commitErr) {
 				return status
 			} else {
 				status.Branch = "detached HEAD"
@@ -620,15 +564,10 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoStatus {
 	// Check for unstaged changes
 	unstaged, _, err := runGit(ctx, repoPath, "diff", "--name-only")
 	if err != nil {
-		if isGitContextErr(ctx, err) {
-			status.Error = fmt.Sprintf("git timed out or cancelled: %v", err)
+		if setGitCancelled(ctx, &status, err) {
 			return status
 		}
-		if status.Error == "" {
-			status.Error = fmt.Sprintf("Failed to check unstaged changes: %v", err)
-		} else {
-			status.Error += fmt.Sprintf("; unstaged check failed: %v", err)
-		}
+		appendRepoCheckError(&status, err, "Failed to check unstaged changes", "unstaged check failed")
 		return status
 	}
 	status.HasUnstaged = len(strings.TrimSpace(unstaged)) > 0
@@ -636,15 +575,10 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoStatus {
 	// Check for staged changes
 	staged, _, err := runGit(ctx, repoPath, "diff", "--cached", "--name-only")
 	if err != nil {
-		if isGitContextErr(ctx, err) {
-			status.Error = fmt.Sprintf("git timed out or cancelled: %v", err)
+		if setGitCancelled(ctx, &status, err) {
 			return status
 		}
-		if status.Error == "" {
-			status.Error = fmt.Sprintf("Failed to check staged changes: %v", err)
-		} else {
-			status.Error += fmt.Sprintf("; staged check failed: %v", err)
-		}
+		appendRepoCheckError(&status, err, "Failed to check staged changes", "staged check failed")
 		return status
 	}
 	status.HasStaged = len(strings.TrimSpace(staged)) > 0
@@ -652,15 +586,10 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoStatus {
 	// Check for untracked files
 	untracked, _, err := runGit(ctx, repoPath, "ls-files", "--others", "--exclude-standard")
 	if err != nil {
-		if isGitContextErr(ctx, err) {
-			status.Error = fmt.Sprintf("git timed out or cancelled: %v", err)
+		if setGitCancelled(ctx, &status, err) {
 			return status
 		}
-		if status.Error == "" {
-			status.Error = fmt.Sprintf("Failed to check untracked files: %v", err)
-		} else {
-			status.Error += fmt.Sprintf("; untracked check failed: %v", err)
-		}
+		appendRepoCheckError(&status, err, "Failed to check untracked files", "untracked check failed")
 		return status
 	}
 	status.HasUntracked = len(strings.TrimSpace(untracked)) > 0
@@ -668,8 +597,7 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoStatus {
 	// Determine upstream tracking status first.
 	_, upStderr, upstreamErr := runGit(ctx, repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
 	if upstreamErr != nil {
-		if isGitContextErr(ctx, upstreamErr) {
-			status.Error = fmt.Sprintf("git timed out or cancelled: %v", upstreamErr)
+		if setGitCancelled(ctx, &status, upstreamErr) {
 			return status
 		}
 		errOutput := strings.ToLower(upStderr + upstreamErr.Error())
@@ -724,60 +652,20 @@ func shortHeadSHA(ctx context.Context, repoPath string) string {
 }
 
 func displayRepoStatusTable(results []RepoStatus) {
-	// Get working directory for relative paths
 	wd, _ := os.Getwd()
 
 	const pathColWidth = 50
 	const branchColWidth = 20
 	const statusColWidth = 18
 
-	// Print table header
 	fmt.Printf("%-*s %-*s %-*s %s\n", pathColWidth, "Repository", branchColWidth, "Branch", statusColWidth, "Status", "Changes")
 	fmt.Println(strings.Repeat("-", 90))
 
-	// Print each repository as a table row
 	for _, status := range results {
-		// Get relative path for cleaner display
-		relPath, _ := filepath.Rel(wd, status.Path)
-		if relPath == "." {
-			relPath = status.Path
-		}
-
-		// Truncate long paths
-		if len(relPath) > 42 {
-			relPath = "..." + relPath[len(relPath)-39:]
-		}
-
-		// Determine status and changes
-		var statusText, changesText string
-		if status.Error != "" {
-			statusText = "❌ Error"
-			changesText = status.Error
-		} else if status.IsDirty {
-			statusText = "⚠️  Dirty"
-			changesText = strings.Join(getChangesText(status), ", ")
-		} else if status.HasUntrackedUpstream {
-			statusText = "🔗 Untracked Upstream"
-			changesText = "untracked-upstream"
-		} else if status.HasBehind && status.HasUnpushed {
-			statusText = "↕️ Diverged"
-			changesText = strings.Join(getChangesText(status), ", ")
-		} else if status.HasBehind {
-			statusText = "⬇️ Behind"
-			changesText = strings.Join(getChangesText(status), ", ")
-		} else if status.HasUnpushed {
-			statusText = "⬆️ Unpushed"
-			changesText = strings.Join(getChangesText(status), ", ")
-		} else {
-			statusText = "✅ Clean"
-			changesText = "-"
-		}
-
-		// Truncate long branch names
-		branch := status.Branch
-		if len(branch) > 17 {
-			branch = branch[:14] + "..."
-		}
+		snap := RepoStatusToSnapshot(status, false)
+		statusText, changesText := repoStatusText(snap, false)
+		relPath := truncate(displayPath(wd, status.Path), 42)
+		branch := truncate(status.Branch, branchColWidth-3)
 
 		fmt.Printf("%-*s %-*s %-*s %s\n", pathColWidth, relPath, branchColWidth, branch, statusColWidth, statusText, changesText)
 	}
@@ -798,73 +686,20 @@ func exportToCSV(results []RepoStatus, filename string) error {
 		return fmt.Errorf("failed to write header to CSV: %v", err)
 	}
 
+	wd, _ := os.Getwd()
 	for _, status := range results {
-		wd, _ := os.Getwd()
-		relPath, _ := filepath.Rel(wd, status.Path)
-		if relPath == "." {
-			relPath = status.Path
-		}
-
-		branch := status.Branch
-
-		var statusText string
-		if status.Error != "" {
-			statusText = "Error: " + status.Error
-		} else if status.IsDirty {
-			statusText = "Dirty"
-		} else if status.HasUntrackedUpstream {
-			statusText = "UntrackedUpstream"
-		} else if status.HasBehind && status.HasUnpushed {
-			statusText = "Diverged"
-		} else if status.HasBehind {
-			statusText = "Behind"
-		} else if status.HasUnpushed {
-			statusText = "Unpushed"
-		} else {
-			statusText = "Clean"
-		}
-
+		snap := RepoStatusToSnapshot(status, false)
+		statusText, changesText := repoStatusText(snap, true)
 		row := []string{
-			relPath,
+			displayPath(wd, status.Path),
 			status.Origin,
-			branch,
+			status.Branch,
 			statusText,
-			strings.Join(getChangesText(status), ", "),
+			changesText,
 		}
 		if err := writer.Write(row); err != nil {
 			return fmt.Errorf("failed to write row to CSV: %v", err)
 		}
 	}
 	return nil
-}
-
-func getChangesText(status RepoStatus) []string {
-	var changes []string
-	if status.HasUnstaged {
-		changes = append(changes, "unstaged")
-	}
-	if status.HasStaged {
-		changes = append(changes, "staged")
-	}
-	if status.HasUntracked {
-		changes = append(changes, "untracked")
-	}
-	if status.HasUnpushed {
-		if status.AheadCount > 0 {
-			changes = append(changes, fmt.Sprintf("unpushed:%d", status.AheadCount))
-		} else {
-			changes = append(changes, "unpushed")
-		}
-	}
-	if status.HasBehind {
-		if status.BehindCount > 0 {
-			changes = append(changes, fmt.Sprintf("behind:%d", status.BehindCount))
-		} else {
-			changes = append(changes, "behind")
-		}
-	}
-	if status.HasUntrackedUpstream {
-		changes = append(changes, "untracked-upstream")
-	}
-	return changes
 }
