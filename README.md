@@ -75,11 +75,13 @@ Use a **private** Git repository as a sync bus so each machine publishes its lat
 - Each machine writes only its own file: `machines/<sanitized>-<hash>.json` (short hash of the raw machine id avoids collisions after path-unsafe characters are sanitized)
 - Each repo entry includes a normalized **`origin`** URL (when configured) so the same project can be correlated across machines even when local paths differ; SSH and HTTPS remotes canonicalize to the same key
 - Aggregate rows sort by that identity (origin, or path basename for local-only repos) so copies of one project land together
-- Background `--agent` mode pulls, scans, writes, and push/rebases on an interval (default **30s**)
+- Background `--agent` mode pulls, scans, writes, and push/rebases on a check interval (default **2m**)
+- Each agent tick has a **2m deadline**; every individual git subprocess has a **30s** deadline (`CommandContext`). Hung credential prompts or stuck git abort the tick with a warning instead of stalling forever while the process looks healthy
+- Agent git invocations set `GIT_TERMINAL_PROMPT=0` so interactive credential waits fail fast
 - Interactive scans load remotes when a state repo is resolved from `--state-repo`, `FIND_UNCOMMITTED_STATE_REPO`, or sticky TOML config (unless `--no-remote`)
-- Snapshots older than `--stale-ttl` (default **5m**) are labeled **stale**
-- Unchanged status does not create commits every tick; a heartbeat commit keeps freshness without constant chatty history
-- Agent exits cleanly on Ctrl+C / SIGTERM
+- Snapshots older than `--stale-ttl` (default **30m**) are labeled **stale**
+- Unchanged status does not create commits every tick; a **heartbeat** commit (default **15m**, sticky `heartbeat`) refreshes `updated_at` so remote views stay fresh without chatty history. Content changes still publish on the check that detects them
+- Agent exits cleanly on Ctrl+C / SIGTERM (mid-tick git work is cancelled)
 
 ### Sticky config (recommended)
 
@@ -96,20 +98,31 @@ Example:
 state_repo = "/path/to/uncommitted-state"
 scan_root = "/path/to/repos"
 machine_id = ""
-interval = "30s"
-stale_ttl = "5m"
+interval = "2m"       # how often to check (scan + publish decision)
+heartbeat = "15m"     # liveness commit when status is unchanged
+stale_ttl = "30m"     # mark remote snapshots stale after this (keep ≈ 2× heartbeat)
 redact_paths = false
+```
+
+To restore the older aggressive profile (frequent checks + chatty heartbeats):
+
+```toml
+interval = "30s"
+heartbeat = "2m"
+stale_ttl = "5m"
 ```
 
 **Precedence:** CLI flags > environment variables > config file > built-in defaults.
 
-Useful env vars: `FIND_UNCOMMITTED_STATE_REPO`, `FIND_UNCOMMITTED_SCAN_ROOT`, `FIND_UNCOMMITTED_MACHINE_ID`, `FIND_UNCOMMITTED_INTERVAL`, `FIND_UNCOMMITTED_STALE_TTL`, `FIND_UNCOMMITTED_REDACT_PATHS`.
+Useful env vars: `FIND_UNCOMMITTED_STATE_REPO`, `FIND_UNCOMMITTED_SCAN_ROOT`, `FIND_UNCOMMITTED_MACHINE_ID`, `FIND_UNCOMMITTED_INTERVAL`, `FIND_UNCOMMITTED_HEARTBEAT`, `FIND_UNCOMMITTED_STALE_TTL`, `FIND_UNCOMMITTED_REDACT_PATHS`.
 
 When config supplies `state_repo`, the CLI prints a short stderr notice and aggregates remotes. Use `--no-remote` for a local-only scan. If the configured state clone path is missing or invalid, the scan **exits with an error** (so a bad sticky config cannot silently look like a local-only machine). If the clone is valid but offline/`git pull` fails, the tool warns and still shows local results plus any on-disk snapshots. Corrupt individual snapshot JSON files are skipped with a stderr warning; valid siblings still appear in the aggregate.
 
 `--install-scheduler` runs a one-shot **smoke publish** before registering the OS scheduler, then prints the snapshot path so you can confirm a file landed in the state repo.
 
 **Migration:** If you installed the scheduler before sticky config existed, re-run `--install-scheduler` once (or create the TOML file manually). Until then, interactive scans stay local-only unless you pass `--state-repo`.
+
+If your sticky config still has `stale_ttl = "5m"` from an older install, bump it to `30m` (or at least ~2× `heartbeat`). Newer defaults use a `15m` heartbeat when unset; leaving `stale_ttl` at `5m` makes healthy machines look stale for most of each heartbeat window.
 
 ### Privacy warning
 
@@ -122,7 +135,7 @@ Snapshots can include repository **paths**, **branch names**, and normalized **`
 3. Start the agent (or install the scheduler):
 
 ```bash
-# Run agent in the foreground (default interval 30s)
+# Run agent in the foreground (default check interval 2m, heartbeat 15m)
 ./find-uncommitted --agent --state-repo /path/to/state-clone /path/to/scan/root
 
 # Install OS scheduler (writes sticky config, smoke-publishes a snapshot, then registers Task Scheduler / systemd)
@@ -141,19 +154,19 @@ Snapshots can include repository **paths**, **branch names**, and normalized **`
 
 Linux notes:
 - Uses a systemd **user** service that keeps the long-running agent alive
-- The unit launches `--agent` only; `scan_root`, `state_repo`, `interval`, and related settings come from sticky config
+- The unit launches `--agent` only; `scan_root`, `state_repo`, `interval`, `heartbeat`, and related settings come from sticky config
 - For headless sessions: `loginctl enable-linger $USER`
 
 Windows notes:
 - Registers an **at-logon** scheduled task that starts the agent process
-- The 30s cadence is owned by the agent loop (not a 30s Task Scheduler trigger)
+- Check / heartbeat cadence is owned by the agent loop (not a Task Scheduler repeat trigger)
 
 ### Aggregate CLI view
 
 ```bash
 # Explicit state repo (also works without sticky config)
 ./find-uncommitted --state-repo /path/to/state-clone /path/to/scan/root
-./find-uncommitted --state-repo /path/to/state-clone --stale-ttl 5m --machine-id my-laptop /path/to/scan/root
+./find-uncommitted --state-repo /path/to/state-clone --stale-ttl 30m --machine-id my-laptop /path/to/scan/root
 
 # With sticky config already installed
 ./find-uncommitted /path/to/scan/root
@@ -178,8 +191,10 @@ Useful flags:
 |------|---------|
 | `--state-repo` | Local clone of the private sync Git repo |
 | `--agent` | Background publish loop |
-| `--interval` | Publish interval (default `30s`) |
-| `--stale-ttl` | Staleness threshold (default `5m`) |
+| `--interval` | Check interval: scan + publish decision (default `2m`) |
+| `--heartbeat` | Liveness commit when status unchanged (default `15m`) |
+| `--stale-ttl` | Staleness threshold (default `30m`; keep ≈ 2× `heartbeat`) |
+| `--tick-timeout` | Per-tick deadline for pull, scan, and publish (default `2m`) |
 | `--machine-id` | Override hostname-based machine id |
 | `--redact-paths` | Publish basename-only paths |
 | `--no-remote` | Local scan only even if a state repo is configured |

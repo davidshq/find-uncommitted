@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -30,7 +31,10 @@ func (s *scriptedGit) enqueue(cmd string, res gitResult) {
 	s.queue[cmd] = append(s.queue[cmd], res)
 }
 
-func (s *scriptedGit) Run(dir string, args ...string) (string, string, error) {
+func (s *scriptedGit) Run(ctx context.Context, dir string, args ...string) (string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	copied := append([]string{}, args...)
@@ -48,7 +52,7 @@ func (s *scriptedGit) Run(dir string, args ...string) (string, string, error) {
 func TestPullStateRepoOfflineWarning(t *testing.T) {
 	g := newScriptedGit()
 	g.enqueue("pull", gitResult{stderr: "network down", err: errors.New("exit 1")})
-	err := PullStateRepo(SyncConfig{StateRepoDir: t.TempDir(), Runner: g, RetryDelay: time.Millisecond})
+	err := PullStateRepo(context.Background(), SyncConfig{StateRepoDir: t.TempDir(), Runner: g, RetryDelay: time.Millisecond})
 	var warn SyncWarning
 	if !errors.As(err, &warn) {
 		t.Fatalf("expected SyncWarning, got %T %v", err, err)
@@ -76,7 +80,7 @@ func TestCommitAndPushRetriesThenSucceeds(t *testing.T) {
 		Runner:       g,
 	}
 	path := SnapshotFilePath(dir, "box")
-	if err := commitAndPush(cfg, path); err != nil {
+	if err := commitAndPush(context.Background(), cfg, path); err != nil {
 		t.Fatalf("commitAndPush: %v", err)
 	}
 
@@ -117,7 +121,7 @@ func TestPublishSkipsCommitWhenUnchangedWithinHeartbeat(t *testing.T) {
 	next := snap
 	next.UpdatedAt = time.Now().UTC()
 
-	committed, err := PublishLocalSnapshot(cfg, next)
+	committed, err := PublishLocalSnapshot(context.Background(), cfg, next)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +168,7 @@ func TestPublishPushesWhenAheadWithoutNewCommit(t *testing.T) {
 	next := snap
 	next.UpdatedAt = time.Now().UTC()
 
-	published, err := PublishLocalSnapshot(cfg, next)
+	published, err := PublishLocalSnapshot(context.Background(), cfg, next)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +211,7 @@ func TestPublishCommitsOnHeartbeat(t *testing.T) {
 	next := snap
 	next.UpdatedAt = time.Now().UTC()
 
-	committed, err := PublishLocalSnapshot(cfg, next)
+	committed, err := PublishLocalSnapshot(context.Background(), cfg, next)
 	if err != nil {
 		t.Fatal(err)
 	}

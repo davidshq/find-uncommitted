@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/csv"
 	"flag"
 	"fmt"
@@ -42,7 +43,9 @@ func main() {
 		stateRepo      string
 		agentMode      bool
 		intervalStr    string
+		heartbeatStr   string
 		staleTTLStr    string
+		tickTimeoutStr string
 		machineID      string
 		installSched   bool
 		uninstallSched bool
@@ -55,8 +58,10 @@ func main() {
 	flag.StringVar(&outputFile, "output", "", "Save results to CSV file (e.g., --output results.csv)")
 	flag.StringVar(&stateRepo, "state-repo", "", "Local path to private Git state repository for cross-machine sync")
 	flag.BoolVar(&agentMode, "agent", false, "Run as background agent publishing machine snapshots")
-	flag.StringVar(&intervalStr, "interval", "30s", "Agent publish interval (default 30s)")
-	flag.StringVar(&staleTTLStr, "stale-ttl", "5m", "Mark machine snapshots stale after this duration")
+	flag.StringVar(&intervalStr, "interval", DefaultIntervalString, "Agent check interval (default 2m)")
+	flag.StringVar(&heartbeatStr, "heartbeat", DefaultHeartbeatString, "Agent liveness commit interval when status unchanged (default 15m)")
+	flag.StringVar(&staleTTLStr, "stale-ttl", DefaultStaleTTLString, "Mark machine snapshots stale after this duration (default 30m)")
+	flag.StringVar(&tickTimeoutStr, "tick-timeout", DefaultTickTimeoutString, "Agent per-tick deadline for pull, scan, and publish (default 2m)")
 	flag.StringVar(&machineID, "machine-id", "", "Machine identifier (default: hostname)")
 	flag.BoolVar(&installSched, "install-scheduler", false, "Install OS scheduler to run the agent at login")
 	flag.BoolVar(&uninstallSched, "uninstall-scheduler", false, "Remove OS scheduler registration")
@@ -104,6 +109,8 @@ func main() {
 		MachineIDSet:   flagSet["machine-id"],
 		Interval:       intervalStr,
 		IntervalSet:    flagSet["interval"],
+		Heartbeat:      heartbeatStr,
+		HeartbeatSet:   flagSet["heartbeat"],
 		StaleTTL:       staleTTLStr,
 		StaleTTLSet:    flagSet["stale-ttl"],
 		RedactPaths:    redactPaths,
@@ -114,6 +121,9 @@ func main() {
 	machineID = resolved.MachineID
 	if resolved.Interval != "" {
 		intervalStr = resolved.Interval
+	}
+	if resolved.Heartbeat != "" {
+		heartbeatStr = resolved.Heartbeat
 	}
 	if resolved.StaleTTL != "" {
 		staleTTLStr = resolved.StaleTTL
@@ -134,10 +144,27 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Invalid --interval: %v\n", err)
 		os.Exit(1)
 	}
+	heartbeat, err := time.ParseDuration(heartbeatStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid heartbeat: %v\n", err)
+		os.Exit(1)
+	}
 	staleTTL, err := time.ParseDuration(staleTTLStr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Invalid --stale-ttl: %v\n", err)
 		os.Exit(1)
+	}
+	tickTimeout, err := time.ParseDuration(tickTimeoutStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid --tick-timeout: %v\n", err)
+		os.Exit(1)
+	}
+	if tickTimeout <= 0 {
+		fmt.Fprintln(os.Stderr, "Invalid --tick-timeout: must be positive")
+		os.Exit(1)
+	}
+	if stateRepo != "" {
+		warnStaleTTLMismatch(heartbeat, staleTTL)
 	}
 
 	var rootDir string
@@ -171,6 +198,7 @@ func main() {
 				StateRepo:   stateRepo,
 				ScanRoot:    rootDir,
 				Interval:    intervalStr,
+				Heartbeat:   heartbeatStr,
 				StaleTTL:    staleTTLStr,
 				RedactPaths: redactPaths,
 			}
@@ -196,10 +224,12 @@ func main() {
 			ScanRoot:     rootDir,
 			StateRepoDir: stateRepo,
 			MachineID:    machineID,
+			TickTimeout:  tickTimeout,
 			RedactPaths:  redactPaths,
 			Sync: SyncConfig{
 				StateRepoDir: stateRepo,
 				MachineID:    machineID,
+				Heartbeat:    heartbeat,
 			},
 		})
 		if err != nil {
@@ -229,7 +259,7 @@ func main() {
 			if flagSet["machine-id"] {
 				persistMachineID = machineID
 			}
-			if err := EnsureConfigFromAgent(configPath, stateRepo, rootDir, persistMachineID, intervalStr, staleTTLStr, redactPaths); err != nil {
+			if err := EnsureConfigFromAgent(configPath, stateRepo, rootDir, persistMachineID, intervalStr, heartbeatStr, staleTTLStr, redactPaths); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not write sticky config: %v\n", err)
 			}
 		}
@@ -239,11 +269,13 @@ func main() {
 			StateRepoDir: stateRepo,
 			MachineID:    machineID,
 			Interval:     interval,
+			TickTimeout:  tickTimeout,
 			RedactPaths:  redactPaths,
 			DirtyOnly:    false, // agent always publishes full status set
 			Sync: SyncConfig{
 				StateRepoDir: stateRepo,
 				MachineID:    machineID,
+				Heartbeat:    heartbeat,
 			},
 		})
 		if err != nil {
@@ -275,7 +307,8 @@ func main() {
 	// (other-machine work, branch mismatch) can still be detected; --dirty-only
 	// filters the Attention/inventory presentation instead.
 	willTryRemote := stateRepo != "" && !skipRemote
-	results := checkRepoStatuses(repos, dirtyOnly && !willTryRemote)
+	scanCtx := context.Background()
+	results := checkRepoStatuses(scanCtx, repos, dirtyOnly && !willTryRemote)
 
 	var remote []LoadedSnapshot
 	remoteOK := false
@@ -290,7 +323,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "Fix state_repo in sticky config / env / --state-repo, or pass --no-remote for a local-only scan.")
 			os.Exit(1)
 		}
-		if err := PullStateRepoReadOnly(SyncConfig{StateRepoDir: stateRepo, MachineID: machineID}); err != nil {
+		if err := PullStateRepoReadOnly(scanCtx, SyncConfig{StateRepoDir: stateRepo, MachineID: machineID}); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 		}
 		// Try on-disk snapshots even when pull fails.
@@ -368,7 +401,7 @@ func printUsage() {
 	fmt.Println("  find-uncommitted C:\\code")
 	fmt.Println("  find-uncommitted --dirty-only --output results.csv C:\\code")
 	fmt.Println("  find-uncommitted --state-repo D:\\state-repo C:\\code")
-	fmt.Println("  find-uncommitted --agent --state-repo D:\\state-repo --interval 30s C:\\code")
+	fmt.Println("  find-uncommitted --agent --state-repo D:\\state-repo --interval 2m C:\\code")
 	fmt.Println("  find-uncommitted --install-scheduler --state-repo D:\\state-repo C:\\code")
 	fmt.Println()
 	fmt.Println("After --install-scheduler, sticky config enables aggregate remotes on bare scans.")
@@ -525,54 +558,72 @@ func shouldExcludeRepo(repoPath string, excludes []string) bool {
 	return false
 }
 
-func checkRepoStatus(repoPath string) RepoStatus {
+func checkRepoStatus(ctx context.Context, repoPath string) RepoStatus {
 	status := RepoStatus{
 		Path: repoPath,
 	}
 
+	if err := ctx.Err(); err != nil {
+		status.Error = fmt.Sprintf("git check cancelled: %v", err)
+		return status
+	}
+
 	// First check if this is a valid git repository
-	_, err := exec.Command("git", "-C", repoPath, "rev-parse", "--git-dir").Output()
+	_, stderr, err := runGit(ctx, repoPath, "rev-parse", "--git-dir")
 	if err != nil {
+		if isGitContextErr(ctx, err) {
+			status.Error = fmt.Sprintf("git timed out or cancelled: %v", err)
+			return status
+		}
 		// Check if it's a dubious ownership error
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			errOutput := string(exitErr.Stderr)
-			if strings.Contains(errOutput, "dubious ownership") {
-				status.Error = "Git ownership issue - run: git config --global --add safe.directory " + strings.ReplaceAll(repoPath, "\\", "/")
-				return status
-			}
+		if strings.Contains(stderr, "dubious ownership") {
+			status.Error = "Git ownership issue - run: git config --global --add safe.directory " + strings.ReplaceAll(repoPath, "\\", "/")
+			return status
 		}
 		status.Error = "Not a valid git repository"
 		return status
 	}
 
 	// Get current branch
-	branch, err := exec.Command("git", "-C", repoPath, "branch", "--show-current").Output()
+	branch, stderr, err := runGit(ctx, repoPath, "branch", "--show-current")
 	if err != nil {
-		// Check if it's a detached HEAD state
+		if isGitContextErr(ctx, err) {
+			status.Error = fmt.Sprintf("git timed out or cancelled: %v", err)
+			return status
+		}
+		// Check if it's a detached HEAD state (exit code 1)
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			// Try to get the commit hash instead
-			commit, commitErr := exec.Command("git", "-C", repoPath, "rev-parse", "--short", "HEAD").Output()
+			commit, _, commitErr := runGit(ctx, repoPath, "rev-parse", "--short", "HEAD")
 			if commitErr == nil {
-				status.Branch = fmt.Sprintf("detached HEAD (%s)", strings.TrimSpace(string(commit)))
+				status.Branch = fmt.Sprintf("detached HEAD (%s)", strings.TrimSpace(commit))
+			} else if isGitContextErr(ctx, commitErr) {
+				status.Error = fmt.Sprintf("git timed out or cancelled: %v", commitErr)
+				return status
 			} else {
 				status.Branch = "detached HEAD"
 				status.Error = fmt.Sprintf("Branch issue: %v", err)
 			}
 		} else {
+			_ = stderr
 			status.Branch = "unknown"
 			status.Error = fmt.Sprintf("Branch issue: %v", err)
 		}
 		// Don't return here, continue checking other status
 	} else {
-		status.Branch = strings.TrimSpace(string(branch))
+		status.Branch = strings.TrimSpace(branch)
 	}
 
 	// Capture normalized origin for cross-machine project correlation.
-	status.Origin = repoOriginURL(repoPath)
+	status.Origin = repoOriginURL(ctx, repoPath)
 
 	// Check for unstaged changes
-	unstaged, err := exec.Command("git", "-C", repoPath, "diff", "--name-only").Output()
+	unstaged, _, err := runGit(ctx, repoPath, "diff", "--name-only")
 	if err != nil {
+		if isGitContextErr(ctx, err) {
+			status.Error = fmt.Sprintf("git timed out or cancelled: %v", err)
+			return status
+		}
 		if status.Error == "" {
 			status.Error = fmt.Sprintf("Failed to check unstaged changes: %v", err)
 		} else {
@@ -580,11 +631,15 @@ func checkRepoStatus(repoPath string) RepoStatus {
 		}
 		return status
 	}
-	status.HasUnstaged = len(strings.TrimSpace(string(unstaged))) > 0
+	status.HasUnstaged = len(strings.TrimSpace(unstaged)) > 0
 
 	// Check for staged changes
-	staged, err := exec.Command("git", "-C", repoPath, "diff", "--cached", "--name-only").Output()
+	staged, _, err := runGit(ctx, repoPath, "diff", "--cached", "--name-only")
 	if err != nil {
+		if isGitContextErr(ctx, err) {
+			status.Error = fmt.Sprintf("git timed out or cancelled: %v", err)
+			return status
+		}
 		if status.Error == "" {
 			status.Error = fmt.Sprintf("Failed to check staged changes: %v", err)
 		} else {
@@ -592,11 +647,15 @@ func checkRepoStatus(repoPath string) RepoStatus {
 		}
 		return status
 	}
-	status.HasStaged = len(strings.TrimSpace(string(staged))) > 0
+	status.HasStaged = len(strings.TrimSpace(staged)) > 0
 
 	// Check for untracked files
-	untracked, err := exec.Command("git", "-C", repoPath, "ls-files", "--others", "--exclude-standard").Output()
+	untracked, _, err := runGit(ctx, repoPath, "ls-files", "--others", "--exclude-standard")
 	if err != nil {
+		if isGitContextErr(ctx, err) {
+			status.Error = fmt.Sprintf("git timed out or cancelled: %v", err)
+			return status
+		}
 		if status.Error == "" {
 			status.Error = fmt.Sprintf("Failed to check untracked files: %v", err)
 		} else {
@@ -604,30 +663,30 @@ func checkRepoStatus(repoPath string) RepoStatus {
 		}
 		return status
 	}
-	status.HasUntracked = len(strings.TrimSpace(string(untracked))) > 0
+	status.HasUntracked = len(strings.TrimSpace(untracked)) > 0
 
 	// Determine upstream tracking status first.
-	_, upstreamErr := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").Output()
+	_, upStderr, upstreamErr := runGit(ctx, repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
 	if upstreamErr != nil {
-		if exitErr, ok := upstreamErr.(*exec.ExitError); ok {
-			errOutput := strings.ToLower(string(exitErr.Stderr))
-			if strings.Contains(errOutput, "no upstream configured") {
-				status.HasUntrackedUpstream = true
-			} else {
-				status.Error = fmt.Sprintf("Failed to check upstream tracking: %v", upstreamErr)
-			}
+		if isGitContextErr(ctx, upstreamErr) {
+			status.Error = fmt.Sprintf("git timed out or cancelled: %v", upstreamErr)
+			return status
+		}
+		errOutput := strings.ToLower(upStderr + upstreamErr.Error())
+		if strings.Contains(errOutput, "no upstream configured") {
+			status.HasUntrackedUpstream = true
 		} else {
 			status.Error = fmt.Sprintf("Failed to check upstream tracking: %v", upstreamErr)
 		}
 	} else {
 		// Ahead/behind against cached upstream refs only (no fetch).
-		status.AheadCount = revListCount(repoPath, "@{u}..HEAD")
-		status.BehindCount = revListCount(repoPath, "HEAD..@{u}")
+		status.AheadCount = revListCount(ctx, repoPath, "@{u}..HEAD")
+		status.BehindCount = revListCount(ctx, repoPath, "HEAD..@{u}")
 		status.HasUnpushed = status.AheadCount > 0
 		status.HasBehind = status.BehindCount > 0
 	}
 
-	status.HeadSHA = shortHeadSHA(repoPath)
+	status.HeadSHA = shortHeadSHA(ctx, repoPath)
 
 	// Dirty means working tree changes only.
 	status.IsDirty = status.HasUnstaged || status.HasStaged || status.HasUntracked
@@ -637,15 +696,15 @@ func checkRepoStatus(repoPath string) RepoStatus {
 }
 
 // revListCount runs `git rev-list --count <range>` and returns 0 on any failure.
-func revListCount(repoPath, revRange string) int {
-	out, err := exec.Command("git", "-C", repoPath, "rev-list", "--count", revRange).Output()
+func revListCount(ctx context.Context, repoPath, revRange string) int {
+	out, _, err := runGit(ctx, repoPath, "rev-list", "--count", revRange)
 	if err != nil {
 		if debugMode {
 			fmt.Printf("[DEBUG] Failed rev-list %s in %s: %v\n", revRange, repoPath, err)
 		}
 		return 0
 	}
-	count, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	count, err := strconv.Atoi(strings.TrimSpace(out))
 	if err != nil {
 		if debugMode {
 			fmt.Printf("[DEBUG] Failed to parse rev-list count in %s: %v\n", repoPath, err)
@@ -656,12 +715,12 @@ func revListCount(repoPath, revRange string) int {
 }
 
 // shortHeadSHA returns a short HEAD commit hash, or empty when unavailable.
-func shortHeadSHA(repoPath string) string {
-	out, err := exec.Command("git", "-C", repoPath, "rev-parse", "--short", "HEAD").Output()
+func shortHeadSHA(ctx context.Context, repoPath string) string {
+	out, _, err := runGit(ctx, repoPath, "rev-parse", "--short", "HEAD")
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(out)
 }
 
 func displayRepoStatusTable(results []RepoStatus) {

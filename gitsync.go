@@ -1,32 +1,13 @@
 package main
 
 import (
-	"bytes"
+	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
-
-// GitRunner abstracts git command execution for tests.
-type GitRunner interface {
-	Run(dir string, args ...string) (stdout string, stderr string, err error)
-}
-
-// ExecGitRunner runs real git commands.
-type ExecGitRunner struct{}
-
-func (ExecGitRunner) Run(dir string, args ...string) (string, string, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	return stdout.String(), stderr.String(), err
-}
 
 // SyncConfig controls state-repo git operations.
 type SyncConfig struct {
@@ -36,6 +17,7 @@ type SyncConfig struct {
 	RetryDelay   time.Duration
 	// Heartbeat forces a commit when status is unchanged but the last
 	// published UpdatedAt is older than this, so remote views stay fresh.
+	// Zero means DefaultHeartbeat (15m). Sticky config key: heartbeat.
 	Heartbeat time.Duration
 	Runner    GitRunner
 }
@@ -61,9 +43,12 @@ func (c SyncConfig) delay() time.Duration {
 	return c.RetryDelay
 }
 
+// DefaultHeartbeat is the liveness commit interval when snapshot content is unchanged.
+const DefaultHeartbeat = 15 * time.Minute
+
 func (c SyncConfig) heartbeat() time.Duration {
 	if c.Heartbeat <= 0 {
-		return 2 * time.Minute
+		return DefaultHeartbeat
 	}
 	return c.Heartbeat
 }
@@ -81,10 +66,12 @@ func (w SyncWarning) Error() string {
 	return fmt.Sprintf("%s: %v", w.Message, w.Err)
 }
 
+func (w SyncWarning) Unwrap() error { return w.Err }
+
 // PullStateRepo fetches latest remote state with rebase (agent publish path).
-func PullStateRepo(cfg SyncConfig) error {
+func PullStateRepo(ctx context.Context, cfg SyncConfig) error {
 	r := cfg.runner()
-	_, stderr, err := r.Run(cfg.StateRepoDir, "pull", "--rebase", "--autostash")
+	_, stderr, err := r.Run(ctx, cfg.StateRepoDir, "pull", "--rebase", "--autostash")
 	if err != nil {
 		return SyncWarning{
 			Message: "state repo pull failed (will retry later)",
@@ -95,9 +82,9 @@ func PullStateRepo(cfg SyncConfig) error {
 }
 
 // PullStateRepoReadOnly updates the state clone for viewing without rewrite-heavy rebase.
-func PullStateRepoReadOnly(cfg SyncConfig) error {
+func PullStateRepoReadOnly(ctx context.Context, cfg SyncConfig) error {
 	r := cfg.runner()
-	_, stderr, err := r.Run(cfg.StateRepoDir, "pull", "--ff-only")
+	_, stderr, err := r.Run(ctx, cfg.StateRepoDir, "pull", "--ff-only")
 	if err != nil {
 		return SyncWarning{
 			Message: "state repo fast-forward pull failed (using local snapshots)",
@@ -112,7 +99,7 @@ func PullStateRepoReadOnly(cfg SyncConfig) error {
 // or remote staleness detection breaks while the agent is still healthy.
 // When content is unchanged, still push if local commits are ahead of upstream
 // (e.g. previous tick committed but failed to push).
-func PublishLocalSnapshot(cfg SyncConfig, snap MachineSnapshot) (published bool, err error) {
+func PublishLocalSnapshot(ctx context.Context, cfg SyncConfig, snap MachineSnapshot) (published bool, err error) {
 	path := SnapshotFilePath(cfg.StateRepoDir, cfg.MachineID)
 	prev, readErr := ReadMachineSnapshot(path)
 	needsCommit := true
@@ -123,22 +110,22 @@ func PublishLocalSnapshot(cfg SyncConfig, snap MachineSnapshot) (published bool,
 	}
 
 	if !needsCommit {
-		pushed, err := pushIfAhead(cfg)
+		pushed, err := pushIfAhead(ctx, cfg)
 		return pushed, err
 	}
 
 	if err := WriteMachineSnapshot(path, snap); err != nil {
 		return false, err
 	}
-	if err := commitAndPush(cfg, path); err != nil {
+	if err := commitAndPush(ctx, cfg, path); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func aheadOfUpstreamCount(cfg SyncConfig) (int, error) {
+func aheadOfUpstreamCount(ctx context.Context, cfg SyncConfig) (int, error) {
 	r := cfg.runner()
-	out, stderr, err := r.Run(cfg.StateRepoDir, "rev-list", "--count", "@{u}..HEAD")
+	out, stderr, err := r.Run(ctx, cfg.StateRepoDir, "rev-list", "--count", "@{u}..HEAD")
 	if err != nil {
 		return 0, fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr))
 	}
@@ -150,26 +137,26 @@ func aheadOfUpstreamCount(cfg SyncConfig) (int, error) {
 }
 
 // pushIfAhead rebases and pushes when local commits are not on the remote yet.
-func pushIfAhead(cfg SyncConfig) (bool, error) {
-	n, err := aheadOfUpstreamCount(cfg)
+func pushIfAhead(ctx context.Context, cfg SyncConfig) (bool, error) {
+	n, err := aheadOfUpstreamCount(ctx, cfg)
 	if err != nil || n == 0 {
 		// No upstream / not ahead: nothing to flush.
 		return false, nil
 	}
-	if err := rebaseAndPush(cfg); err != nil {
+	if err := rebaseAndPush(ctx, cfg); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func commitAndPush(cfg SyncConfig, relPath string) error {
+func commitAndPush(ctx context.Context, cfg SyncConfig, relPath string) error {
 	r := cfg.runner()
 	addPath, err := filepath.Rel(cfg.StateRepoDir, relPath)
 	if err != nil {
 		addPath = relPath
 	}
 
-	if _, stderr, err := r.Run(cfg.StateRepoDir, "add", "--", addPath); err != nil {
+	if _, stderr, err := r.Run(ctx, cfg.StateRepoDir, "add", "--", addPath); err != nil {
 		return SyncWarning{
 			Message: "state repo git add failed",
 			Err:     fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr)),
@@ -177,11 +164,11 @@ func commitAndPush(cfg SyncConfig, relPath string) error {
 	}
 
 	msg := fmt.Sprintf("update snapshot for %s", sanitizeMachineID(cfg.MachineID))
-	if _, stderr, err := r.Run(cfg.StateRepoDir, "commit", "-m", msg); err != nil {
+	if _, stderr, err := r.Run(ctx, cfg.StateRepoDir, "commit", "-m", msg); err != nil {
 		// Nothing to commit is treated as success (race with equal content).
 		combined := strings.ToLower(stderr + err.Error())
 		if strings.Contains(combined, "nothing to commit") {
-			return rebaseAndPush(cfg)
+			return rebaseAndPush(ctx, cfg)
 		}
 		return SyncWarning{
 			Message: "state repo commit failed",
@@ -189,25 +176,37 @@ func commitAndPush(cfg SyncConfig, relPath string) error {
 		}
 	}
 
-	return rebaseAndPush(cfg)
+	return rebaseAndPush(ctx, cfg)
 }
 
-func rebaseAndPush(cfg SyncConfig) error {
+func rebaseAndPush(ctx context.Context, cfg SyncConfig) error {
 	r := cfg.runner()
 	var lastErr error
 	for attempt := 1; attempt <= cfg.retries(); attempt++ {
-		if _, stderr, err := r.Run(cfg.StateRepoDir, "pull", "--rebase", "--autostash"); err != nil {
+		if err := ctx.Err(); err != nil {
+			return SyncWarning{
+				Message: "state repo sync cancelled",
+				Err:     err,
+			}
+		}
+		if _, stderr, err := r.Run(ctx, cfg.StateRepoDir, "pull", "--rebase", "--autostash"); err != nil {
 			lastErr = SyncWarning{
 				Message: "state repo rebase before push failed",
 				Err:     fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr)),
 			}
+			if isGitContextErr(ctx, err) {
+				return lastErr
+			}
 			time.Sleep(cfg.delay())
 			continue
 		}
-		if _, stderr, err := r.Run(cfg.StateRepoDir, "push"); err != nil {
+		if _, stderr, err := r.Run(ctx, cfg.StateRepoDir, "push"); err != nil {
 			lastErr = SyncWarning{
 				Message: "state repo push failed",
 				Err:     fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr)),
+			}
+			if isGitContextErr(ctx, err) {
+				return lastErr
 			}
 			time.Sleep(cfg.delay())
 			continue

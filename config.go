@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -18,6 +19,7 @@ const (
 	envScanRoot    = "FIND_UNCOMMITTED_SCAN_ROOT"
 	envMachineID   = "FIND_UNCOMMITTED_MACHINE_ID"
 	envInterval    = "FIND_UNCOMMITTED_INTERVAL"
+	envHeartbeat   = "FIND_UNCOMMITTED_HEARTBEAT"
 	envStaleTTL    = "FIND_UNCOMMITTED_STALE_TTL"
 	envRedactPaths = "FIND_UNCOMMITTED_REDACT_PATHS"
 )
@@ -28,6 +30,7 @@ type UserConfig struct {
 	ScanRoot    string `toml:"scan_root,omitempty"`
 	MachineID   string `toml:"machine_id,omitempty"`
 	Interval    string `toml:"interval,omitempty"`
+	Heartbeat   string `toml:"heartbeat,omitempty"`
 	StaleTTL    string `toml:"stale_ttl,omitempty"`
 	RedactPaths bool   `toml:"redact_paths,omitempty"`
 }
@@ -52,6 +55,8 @@ type FlagOverrides struct {
 	MachineIDSet   bool
 	Interval       string
 	IntervalSet    bool
+	Heartbeat      string
+	HeartbeatSet   bool
 	StaleTTL       string
 	StaleTTLSet    bool
 	RedactPaths    bool
@@ -68,6 +73,8 @@ type ResolvedSettings struct {
 	MachineIDSource   ConfigSource
 	Interval          string
 	IntervalSource    ConfigSource
+	Heartbeat         string
+	HeartbeatSource   ConfigSource
 	StaleTTL          string
 	StaleTTLSource    ConfigSource
 	RedactPaths       bool
@@ -141,6 +148,7 @@ func ResolveSettings(flags FlagOverrides, file UserConfig, getenv func(string) s
 	out.ScanRoot, out.ScanRootSource = resolveString(flags.ScanRoot, flags.ScanRootSet, getenv(envScanRoot), file.ScanRoot)
 	out.MachineID, out.MachineIDSource = resolveString(flags.MachineID, flags.MachineIDSet, getenv(envMachineID), file.MachineID)
 	out.Interval, out.IntervalSource = resolveString(flags.Interval, flags.IntervalSet, getenv(envInterval), file.Interval)
+	out.Heartbeat, out.HeartbeatSource = resolveString(flags.Heartbeat, flags.HeartbeatSet, getenv(envHeartbeat), file.Heartbeat)
 	out.StaleTTL, out.StaleTTLSource = resolveString(flags.StaleTTL, flags.StaleTTLSet, getenv(envStaleTTL), file.StaleTTL)
 
 	if flags.RedactPathsSet {
@@ -187,7 +195,7 @@ func parseBoolEnv(v string) (bool, bool) {
 }
 
 // EnsureConfigFromAgent writes a sticky config if missing when agent has an explicit state repo.
-func EnsureConfigFromAgent(path string, stateRepo, scanRoot, machineID, interval, staleTTL string, redactPaths bool) error {
+func EnsureConfigFromAgent(path string, stateRepo, scanRoot, machineID, interval, heartbeat, staleTTL string, redactPaths bool) error {
 	if path == "" || stateRepo == "" {
 		return nil
 	}
@@ -199,7 +207,36 @@ func EnsureConfigFromAgent(path string, stateRepo, scanRoot, machineID, interval
 		ScanRoot:    scanRoot,
 		MachineID:   machineID,
 		Interval:    interval,
+		Heartbeat:   heartbeat,
 		StaleTTL:    staleTTL,
 		RedactPaths: redactPaths,
 	})
+}
+
+// minimumStaleTTL is the recommended lower bound for stale_ttl (2× heartbeat).
+func minimumStaleTTL(heartbeat time.Duration) time.Duration {
+	if heartbeat <= 0 {
+		return 0
+	}
+	return 2 * heartbeat
+}
+
+// staleTTLTooShort reports whether staleTTL is below 2× heartbeat.
+func staleTTLTooShort(heartbeat, staleTTL time.Duration) bool {
+	min := minimumStaleTTL(heartbeat)
+	if min == 0 || staleTTL <= 0 {
+		return false
+	}
+	return staleTTL < min
+}
+
+// warnStaleTTLMismatch logs when stale_ttl is likely to mark healthy agents stale.
+func warnStaleTTLMismatch(heartbeat, staleTTL time.Duration) {
+	if !staleTTLTooShort(heartbeat, staleTTL) {
+		return
+	}
+	min := minimumStaleTTL(heartbeat)
+	fmt.Fprintf(os.Stderr,
+		"warning: stale_ttl (%s) is less than 2× heartbeat (%s); healthy machines may appear stale between heartbeats (consider stale_ttl >= %s)\n",
+		staleTTL, heartbeat, min)
 }

@@ -6,16 +6,50 @@ Synchronize repository status across machines using shared Git-backed per-machin
 
 ## Requirements
 
+### Requirement: Configurable liveness heartbeat
+When published snapshot content is unchanged, the system SHALL commit and push a freshness update only when the time since the last published `updated_at` meets or exceeds the configured heartbeat duration (default `15m` when unset). Skipping an unchanged tick MUST NOT rewrite `updated_at` on disk. When snapshot content differs from the last publish, the system SHALL commit and push on that check tick.
+
+#### Scenario: Heartbeat due while unchanged
+- **WHEN** a check tick finds snapshot content equal to the last publish and the last `updated_at` is older than the configured heartbeat
+- **THEN** the system commits and pushes an updated snapshot that refreshes `updated_at`
+
+#### Scenario: Heartbeat not due while unchanged
+- **WHEN** a check tick finds snapshot content equal to the last publish and the last `updated_at` is within the heartbeat window
+- **THEN** the system does not create a new commit for that tick
+
+#### Scenario: Immediate publish on content change
+- **WHEN** a check tick detects snapshot content different from the last publish
+- **THEN** the system commits and pushes the new snapshot on that tick
+
 ### Requirement: Automatic machine state publishing
-The system SHALL support an autonomous background mode that periodically scans local repositories and publishes a machine snapshot to shared state storage without requiring manual command invocation.
+The system SHALL support an autonomous background mode that periodically scans local repositories on the configured check interval and publishes per the heartbeat policy without requiring manual command invocation. The default check interval when unset SHALL be `2m`.
 
 #### Scenario: Periodic publish tick
-- **WHEN** agent mode is running and the configured interval elapses
-- **THEN** the system runs a local repository scan and writes an updated machine snapshot
+- **WHEN** agent mode is running and the configured check interval elapses
+- **THEN** the system runs a local repository scan and evaluates whether to write/commit a machine snapshot (content change or heartbeat due)
 
 #### Scenario: Startup publish
 - **WHEN** agent mode starts
 - **THEN** the system performs an immediate publish attempt before entering periodic waits
+
+#### Scenario: Unchanged status skips commit
+- **WHEN** a check tick finds snapshot content unchanged and the heartbeat window is not due
+- **THEN** the system does not create a commit solely because the check interval elapsed
+
+### Requirement: Cancellable deadline-bounded agent ticks
+Each autonomous publish tick SHALL run under a cancellable context with a per-tick deadline derived from the agent’s parent context (signal cancellation). When the tick deadline expires, the system SHALL abort in-flight git work for that tick, log a non-fatal warning, and continue the agent loop. The wait between ticks SHALL use a reusable interval ticker rather than a one-shot timer recreated each cycle.
+
+#### Scenario: Tick exceeds deadline
+- **WHEN** an agent publish tick (pull, scan, or publish) does not finish before the per-tick deadline
+- **THEN** the tick is aborted, a non-fatal warning is logged, and the agent continues waiting for subsequent ticks
+
+#### Scenario: Signal stops mid-tick
+- **WHEN** the agent receives an interrupt or termination signal during a publish tick
+- **THEN** the tick context is cancelled, in-flight git work is terminated, and the agent loop exits cleanly
+
+#### Scenario: Interval wait uses ticker
+- **WHEN** agent mode is running between publish ticks
+- **THEN** the wait is driven by a `Ticker` at the configured interval (not a fresh one-shot timer each cycle)
 
 ### Requirement: Cross-machine aggregate visibility
 The CLI SHALL load latest available snapshots from all machines in shared state storage and present a combined view during normal runs when a state repository is resolved from an explicit flag, environment variable, or sticky user config, unless remote loading is disabled.
@@ -105,11 +139,15 @@ For repositories without an `origin` remote, correlation SHALL use parent-direct
 - **THEN** those entries share a correlation key
 
 ### Requirement: Snapshot freshness signaling
-The CLI SHALL mark machine snapshots as stale when their last update time exceeds a configurable staleness threshold.
+The CLI SHALL mark machine snapshots as stale when their last update time exceeds a configurable staleness threshold. When the threshold is unset, the built-in default SHALL be `30m`.
 
 #### Scenario: Snapshot exceeds threshold
 - **WHEN** a machine snapshot timestamp is older than the configured stale threshold
 - **THEN** the machine is labeled stale in output
+
+#### Scenario: Unset threshold uses calm default
+- **WHEN** no stale threshold is configured
+- **THEN** snapshots older than 30 minutes are labeled stale
 
 ### Requirement: Conflict-minimized state writes
 Each machine SHALL write only its own snapshot file in shared storage to reduce multi-writer conflicts.
@@ -119,10 +157,14 @@ Each machine SHALL write only its own snapshot file in shared storage to reduce 
 - **THEN** each machine updates only its own file path and sync retries resolve transient push races
 
 ### Requirement: Offline-tolerant sync behavior
-The background publisher SHALL continue operating when network or remote Git access is unavailable and retry on subsequent cycles.
+The background publisher SHALL continue operating when network or remote Git access is unavailable and retry on subsequent cycles. Tick or git-command timeouts SHALL be treated as non-fatal for the agent loop in the same way as connectivity failures.
 
 #### Scenario: Remote unavailable
 - **WHEN** pull or push fails due to connectivity or remote access error
+- **THEN** the agent logs a non-fatal warning and retries on a later cycle
+
+#### Scenario: Tick or git timeout during publish
+- **WHEN** a publish tick fails because the tick deadline or a git command deadline is exceeded
 - **THEN** the agent logs a non-fatal warning and retries on a later cycle
 
 ### Requirement: Offline-tolerant interactive aggregate loading

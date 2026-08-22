@@ -1,10 +1,10 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"net/url"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -12,12 +12,12 @@ import (
 
 // repoOriginURL reads the configured origin remote URL for a repository.
 // Missing origin is not an error — local-only repos simply have no correlation URL.
-func repoOriginURL(repoPath string) string {
-	out, err := exec.Command("git", "-C", repoPath, "remote", "get-url", "origin").Output()
+func repoOriginURL(ctx context.Context, repoPath string) string {
+	out, _, err := runGit(ctx, repoPath, "remote", "get-url", "origin")
 	if err != nil {
 		return ""
 	}
-	return NormalizeOriginURL(string(out))
+	return NormalizeOriginURL(out)
 }
 
 // NormalizeOriginURL canonicalizes git remote URLs so SSH and HTTPS forms of the
