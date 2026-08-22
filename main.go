@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/csv"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -140,6 +141,15 @@ func main() {
 		}
 		machineID = host
 	}
+	// Hostname-only identity collides on cloned VMs; generate and persist a stable id
+	// only when installing the scheduler or starting the agent (not on every bare scan).
+	persistMachineIDInConfig := false
+	if shouldPersistStableMachineID(resolved, fileCfg, flagSet, installSched, agentMode) {
+		machineID = GenerateStableMachineID(machineID)
+		persistMachineIDInConfig = true
+	} else if flagSet["machine-id"] {
+		persistMachineIDInConfig = true
+	}
 
 	interval, err := parseDurationFlag("--interval", intervalStr)
 	if err != nil {
@@ -183,27 +193,10 @@ func main() {
 	}
 
 	if installSched {
-		if stateRepo == "" {
-			fmt.Fprintln(os.Stderr, "Error: --install-scheduler requires --state-repo (or sticky config / FIND_UNCOMMITTED_STATE_REPO)")
-			os.Exit(1)
-		}
-		if err := validateStateRepo(stateRepo); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+		requireStateRepo(stateRepo, "--install-scheduler")
+		validateStateRepoOrExit(stateRepo)
 		if configPath != "" {
-			sticky := UserConfig{
-				StateRepo:   stateRepo,
-				ScanRoot:    rootDir,
-				Interval:    intervalStr,
-				Heartbeat:   heartbeatStr,
-				StaleTTL:    staleTTLStr,
-				RedactPaths: redactPaths,
-			}
-			// Only persist machine_id when explicitly set; blank means hostname at runtime.
-			if flagSet["machine-id"] {
-				sticky.MachineID = machineID
-			}
+			sticky := stickyConfigFromRun(stateRepo, rootDir, machineID, intervalStr, heartbeatStr, staleTTLStr, redactPaths)
 			if err := SaveUserConfig(configPath, sticky); err != nil {
 				fmt.Fprintf(os.Stderr, "Error writing sticky config: %v\n", err)
 				os.Exit(1)
@@ -218,18 +211,7 @@ func main() {
 		printSchedulerPrereqs()
 		// Smoke publish before OS registration so a broken state repo/credentials
 		// fails install loudly (and avoids racing Linux enable --now).
-		snapPath, err := smokePublishOnce(AgentConfig{
-			ScanRoot:     rootDir,
-			StateRepoDir: stateRepo,
-			MachineID:    machineID,
-			TickTimeout:  tickTimeout,
-			RedactPaths:  redactPaths,
-			Sync: SyncConfig{
-				StateRepoDir: stateRepo,
-				MachineID:    machineID,
-				Heartbeat:    heartbeat,
-			},
-		})
+		snapPath, err := smokePublishOnce(newAgentConfig(rootDir, stateRepo, machineID, interval, tickTimeout, redactPaths, heartbeat, false))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: smoke publish failed (scheduler not installed): %v\n", err)
 			os.Exit(1)
@@ -244,38 +226,20 @@ func main() {
 	}
 
 	if agentMode {
-		if stateRepo == "" {
-			fmt.Fprintln(os.Stderr, "Error: --agent requires --state-repo (or sticky config / FIND_UNCOMMITTED_STATE_REPO)")
-			os.Exit(1)
-		}
-		if err := validateStateRepo(stateRepo); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+		requireStateRepo(stateRepo, "--agent")
+		validateStateRepoOrExit(stateRepo)
 		if flagSet["state-repo"] && configPath != "" {
-			persistMachineID := ""
-			if flagSet["machine-id"] {
-				persistMachineID = machineID
-			}
-			if err := EnsureConfigFromAgent(configPath, stateRepo, rootDir, persistMachineID, intervalStr, heartbeatStr, staleTTLStr, redactPaths); err != nil {
+			if err := EnsureConfigFromAgent(configPath, stateRepo, rootDir, machineID, intervalStr, heartbeatStr, staleTTLStr, redactPaths); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not write sticky config: %v\n", err)
 			}
 		}
+		if persistMachineIDInConfig && configPath != "" {
+			if err := EnsureMachineIDInConfig(configPath, machineID); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not persist machine_id: %v\n", err)
+			}
+		}
 		printPrivacyNotice()
-		err := RunAgentLoop(AgentConfig{
-			ScanRoot:     rootDir,
-			StateRepoDir: stateRepo,
-			MachineID:    machineID,
-			Interval:     interval,
-			TickTimeout:  tickTimeout,
-			RedactPaths:  redactPaths,
-			DirtyOnly:    false, // agent always publishes full status set
-			Sync: SyncConfig{
-				StateRepoDir: stateRepo,
-				MachineID:    machineID,
-				Heartbeat:    heartbeat,
-			},
-		})
+		err := RunAgentLoop(newAgentConfig(rootDir, stateRepo, machineID, interval, tickTimeout, redactPaths, heartbeat, false))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Agent error: %v\n", err)
 			os.Exit(1)
@@ -322,7 +286,11 @@ func main() {
 			os.Exit(1)
 		}
 		if err := PullStateRepoReadOnly(scanCtx, SyncConfig{StateRepoDir: stateRepo, MachineID: machineID}); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+			if errors.Is(err, ErrStateRepoBusy) {
+				fmt.Fprintln(os.Stderr, "warning: agent is syncing state repo; using on-disk snapshots")
+			} else {
+				fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+			}
 		}
 		// Try on-disk snapshots even when pull fails.
 		remote, err = LoadAllMachineSnapshots(stateRepo, staleTTL, time.Now().UTC())

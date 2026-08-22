@@ -129,8 +129,11 @@ func displayAggregateTable(rows []AggregateRow, dirtyOnlyFilter bool) {
 
 func displayPath(wd, path string) string {
 	rel, err := filepath.Rel(wd, path)
-	if err != nil || rel == "." {
+	if err != nil {
 		return path
+	}
+	if rel == "." {
+		return "."
 	}
 	return rel
 }

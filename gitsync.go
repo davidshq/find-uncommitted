@@ -70,6 +70,18 @@ func (w SyncWarning) Unwrap() error { return w.Err }
 
 // PullStateRepo fetches latest remote state with rebase (agent publish path).
 func PullStateRepo(ctx context.Context, cfg SyncConfig) error {
+	lock, err := acquireStateRepoSyncLockBlocking(cfg.StateRepoDir)
+	if err != nil {
+		return SyncWarning{
+			Message: "could not acquire state repo sync lock",
+			Err:     err,
+		}
+	}
+	defer lock.Release()
+	return pullStateRepoLocked(ctx, cfg)
+}
+
+func pullStateRepoLocked(ctx context.Context, cfg SyncConfig) error {
 	r := cfg.runner()
 	_, stderr, err := r.Run(ctx, cfg.StateRepoDir, "pull", "--rebase", "--autostash")
 	if err != nil {
@@ -82,7 +94,17 @@ func PullStateRepo(ctx context.Context, cfg SyncConfig) error {
 }
 
 // PullStateRepoReadOnly updates the state clone for viewing without rewrite-heavy rebase.
+// Skips the pull when the sync lock is held (agent publishing) and returns ErrStateRepoBusy.
 func PullStateRepoReadOnly(ctx context.Context, cfg SyncConfig) error {
+	lock, err := tryAcquireStateRepoSyncLock(cfg.StateRepoDir)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	return pullStateRepoReadOnlyLocked(ctx, cfg)
+}
+
+func pullStateRepoReadOnlyLocked(ctx context.Context, cfg SyncConfig) error {
 	r := cfg.runner()
 	_, stderr, err := r.Run(ctx, cfg.StateRepoDir, "pull", "--ff-only")
 	if err != nil {

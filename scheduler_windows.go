@@ -45,7 +45,7 @@ func installScheduler(exePath string) error {
 	}
 	fmt.Printf("Installed Windows scheduled task %q (starts agent at logon).\n", schedulerTaskName)
 	fmt.Printf("Launcher: %s\n", launcher)
-	fmt.Println("Agent settings (scan_root, interval, state_repo, …) come from sticky config.")
+	printAgentStickyConfigHint()
 	return nil
 }
 
@@ -70,12 +70,4 @@ func quoteCmdArg(s string) string {
 		return s
 	}
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
-}
-
-func resolveExecutable() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Abs(exe)
 }

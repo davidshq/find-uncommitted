@@ -79,6 +79,8 @@ Use a **private** Git repository as a sync bus so each machine publishes its lat
 - Each agent tick has a **2m deadline**; every individual git subprocess has a **30s** deadline (`CommandContext`). Hung credential prompts or stuck git abort the tick with a warning instead of stalling forever while the process looks healthy
 - Agent git invocations set `GIT_TERMINAL_PROMPT=0` so interactive credential waits fail fast
 - Interactive scans load remotes when a state repo is resolved from `--state-repo`, `FIND_UNCOMMITTED_STATE_REPO`, or sticky TOML config (unless `--no-remote`)
+- Agent and interactive CLI coordinate on the state clone with a flock on `.find-uncommitted-sync.lock`; if the agent is publishing, the CLI skips `git pull` and uses on-disk snapshots
+- On `--install-scheduler`, a stable `machine_id` is generated and saved when none is configured (hostname + random suffix) so cloned VMs do not silently share an id
 - Snapshots older than `--stale-ttl` (default **30m**) are labeled **stale**
 - Unchanged status does not create commits every tick; a **heartbeat** commit (default **15m**, sticky `heartbeat`) refreshes `updated_at` so remote views stay fresh without chatty history. Content changes still publish on the check that detects them
 - Agent exits cleanly on Ctrl+C / SIGTERM (mid-tick git work is cancelled)
@@ -97,7 +99,7 @@ Example:
 ```toml
 state_repo = "/path/to/uncommitted-state"
 scan_root = "/path/to/repos"
-machine_id = ""
+machine_id = "my-laptop-a1b2"  # auto-generated on --install-scheduler if unset
 interval = "2m"       # how often to check (scan + publish decision)
 heartbeat = "15m"     # liveness commit when status is unchanged
 stale_ttl = "30m"     # mark remote snapshots stale after this (keep ≈ 2× heartbeat)

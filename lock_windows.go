@@ -9,12 +9,24 @@ import (
 )
 
 func lockFileExclusive(f *os.File) error {
+	return lockFileEx(f, true)
+}
+
+func lockFileExclusiveBlocking(f *os.File) error {
+	return lockFileEx(f, false)
+}
+
+func lockFileEx(f *os.File, failImmediately bool) error {
 	const exclusive = 0x00000002
-	const failImmediately = 0x00000001
+	const failImmediatelyFlag = 0x00000001
+	flags := exclusive
+	if failImmediately {
+		flags |= failImmediatelyFlag
+	}
 	var ol syscall.Overlapped
 	r1, _, e1 := procLockFileEx.Call(
 		f.Fd(),
-		uintptr(exclusive|failImmediately),
+		uintptr(flags),
 		0,
 		1,
 		0,
@@ -27,6 +39,14 @@ func lockFileExclusive(f *os.File) error {
 		return syscall.EINVAL
 	}
 	return nil
+}
+
+func lockWouldBlock(err error) bool {
+	if err == nil {
+		return false
+	}
+	errno, ok := err.(syscall.Errno)
+	return ok && errno == syscall.Errno(33) // ERROR_LOCK_VIOLATION
 }
 
 func unlockFile(f *os.File) error {

@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -132,7 +133,14 @@ func runAgentTick(ctx context.Context, cfg AgentConfig) {
 		fmt.Fprintf(os.Stderr, "warning: "+format+"\n", args...)
 	}
 
-	if err := PullStateRepo(ctx, cfg.Sync); err != nil {
+	lock, err := acquireStateRepoSyncLockBlocking(cfg.StateRepoDir)
+	if err != nil {
+		warn("%v", err)
+		return
+	}
+	defer lock.Release()
+
+	if err := pullStateRepoLocked(ctx, cfg.Sync); err != nil {
 		warn("%v", err)
 		// Only abort when the tick/parent context is done. A nested per-command
 		// timeout is treated like any other pull failure: keep going so a local
@@ -173,7 +181,13 @@ func smokePublishOnce(cfg AgentConfig) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.tickTimeout())
 	defer cancel()
 
-	if err := PullStateRepo(ctx, cfg.Sync); err != nil {
+	lock, err := acquireStateRepoSyncLockBlocking(cfg.StateRepoDir)
+	if err != nil {
+		return "", err
+	}
+	defer lock.Release()
+
+	if err := pullStateRepoLocked(ctx, cfg.Sync); err != nil {
 		// Pull may fail offline; still require a successful local publish.
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 	}
@@ -241,5 +255,8 @@ func checkRepoStatuses(ctx context.Context, repos []string, dirtyOnlyFilter bool
 		}
 		results = append(results, status)
 	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Path < results[j].Path
+	})
 	return results
 }

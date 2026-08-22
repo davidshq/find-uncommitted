@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -192,6 +194,43 @@ func parseBoolEnv(v string) (bool, bool) {
 		return false, false
 	}
 	return b, true
+}
+
+// GenerateStableMachineID returns a hostname-based id with a random suffix so cloned VMs
+// do not silently share the same machine_id.
+func GenerateStableMachineID(hostname string) string {
+	var suffix [4]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		suffix = sha256Suffix(hostname)
+	}
+	host := sanitizeMachineID(strings.TrimSpace(hostname))
+	if host == "" || host == "unknown" {
+		host = "machine"
+	}
+	return fmt.Sprintf("%s-%x", host, suffix)
+}
+
+func sha256Suffix(s string) [4]byte {
+	sum := sha256.Sum256([]byte(s))
+	var out [4]byte
+	copy(out[:], sum[:4])
+	return out
+}
+
+// EnsureMachineIDInConfig writes machine_id when sticky config exists but the field is empty.
+func EnsureMachineIDInConfig(path, machineID string) error {
+	if path == "" || machineID == "" || !ConfigFileExists(path) {
+		return nil
+	}
+	cfg, err := LoadUserConfig(path)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(cfg.MachineID) != "" {
+		return nil
+	}
+	cfg.MachineID = machineID
+	return SaveUserConfig(path, cfg)
 }
 
 // EnsureConfigFromAgent writes a sticky config if missing when agent has an explicit state repo.

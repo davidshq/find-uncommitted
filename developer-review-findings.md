@@ -1,18 +1,20 @@
 # Developer review findings
 
-**Date:** 2026-07-24 (updated after sticky config ship)  
+**Date:** 2026-07-24 (updated 2026-08-22 — open items only)  
 **Scope:** Full codebase review (scan CLI, cross-machine sync, agent/schedulers, config, docs, packaging)  
 **Participants (personas):** CLI/UX engineer · Systems/sync engineer · Product/platform engineer · Pragmatic engineer
 
-Three developers independently reviewed the project, then reconciled findings. A pragmatic engineer later ranked what actually matters next. Sticky TOML config (`openspec/changes/archive/2026-07-24-add-sticky-toml-config`) is **shipped**.
+Three developers independently reviewed the project, then reconciled findings. A pragmatic engineer later ranked what actually matters next.
+
+**Landed 2026-08-22 (pragmatic “do now”):** state-repo sync lock (agent ↔ CLI), local row sort by path, `.` path display fix, stable `machine_id` persisted on install / first agent when unset.
 
 ---
 
 ## Shared verdict
 
-`find-uncommitted` already solves a real job: **don’t start conflicting work on machine B while machine A still has dirt.** Local scanning is solid; Git-as-a-sync-bus is a strong, on-brand architecture for a personal tool. Sticky config closed the install→bare-scan gap.
+`find-uncommitted` already solves a real job: **don’t start conflicting work on machine B while machine A still has dirt.** Local scanning is solid; Git-as-a-sync-bus is a strong, on-brand architecture for a personal tool. Sticky config, origin correlation, git timeouts, calmer agent cadence, state-repo locking, stable machine identity, and a sorted local table are landed.
 
-What holds it back is not “more scan dimensions.” It’s **productization and trust**: fix broken first-run docs, make aggregate views correlate the *same* project across machines, harden the shared state-repo clone under concurrent agent+CLI use, and ship a scripting/install story people can leave running.
+What holds it back now is not “more scan dimensions.” It’s **productization**: exit codes / JSON for scripting, packaging hygiene, and making aggregate views answer “where’s my unfinished work on *this* project?”
 
 **North star (agreed):** remain a personal unfinished-Git-work control plane—not a team SaaS, not a full repo manager. Own cross-machine awareness with zero backend.
 
@@ -22,77 +24,66 @@ What holds it back is not “more scan dimensions.” It’s **productization an
 
 ### CLI/UX
 
-The interactive table is good at *triage*, but habit formation is blocked by friction: wrong README build (`go build main.go` fails on the multi-file package), incoherent help vs error paths, nondeterministic local row order, `.` path display that expands then truncates oddly, always-on “may take a while” preamble, emoji/column width issues, and no exit codes / quiet / JSON for scripting. Flag soup mixes scan, agent, and scheduler install—soft subcommands (`scan`, `doctor`, `config show`) can wait, but help and post-install “next steps” should not.
+The interactive table is good at *triage*, but habit formation still has friction: incoherent help vs error paths, always-on “may take a while” preamble, emoji/column width issues, and no exit codes / quiet / JSON for scripting. Flag soup mixes scan, agent, and scheduler install—soft subcommands (`scan`, `doctor`, `config show`) can wait, but help and post-install “next steps” should not.
 
 ### Systems / sync
 
-Architecture is right for a handful of machines. The reliability gaps that will bite at 24/7 use: **no lock between agent and interactive CLI on the shared clone** (flock only serializes agents), agent ticks ignore context/timeouts (hung git blocks forever), `time.After` in the agent loop, ~720 heartbeat commits/machine/day at a 2m heartbeat, Windows has no crash restart (Linux does), and hostname-only machine IDs collide on cloned VMs. Prefer quieter freshness and serialize git ops on the state clone before adding features.
+Architecture is right for a handful of machines. Remaining reliability gaps for 24/7 use: Windows has no crash restart (Linux systemd does). State-repo git ops are serialized via flock; hostname collisions are mitigated by auto-generated `machine_id` on install.
 
 ### Product / platform
 
-The unique wedge is cross-machine awareness—not prettier `git status`. Biggest product miss: aggregate rows keyed by absolute path never correlate laptop vs desktop copies of the same repo. Also missing: LICENSE, CI, releases, `go install`-friendly module path, worktree detection (`.git` *file*), and folding `fix-ownership-tool/` into the main binary. Default 30s agent interval is aggressive for laptops; calmer defaults + `status`/`doctor` make the agent feel operable after install.
+The unique wedge is cross-machine awareness—not prettier `git status`. Origin correlation is in place; the next product leap is making aggregate views answer “where’s my unfinished work on *this* project?” (Project × Machine matrix, `check <path>`). Also missing: LICENSE, CI, releases, `go install`-friendly module path, worktree detection (`.git` *file*), and folding `fix-ownership-tool/` into the main binary. `status`/`doctor` would make the agent feel operable after install.
 
 ### Pragmatic engineer
 
-Personal tool, few machines, one user who already knows git. Optimize for **trust and habit**, not packaging theater. Smallest change that makes you leave the agent running wins.
+Personal tool, few machines, one user who already knows git. Optimize for **trust and habit**, not packaging theater. Next wins are scripting polish when you actually pipe output, then cashing origin work into the primary aggregate view.
 
 #### Priority (ruthless)
 
 | When | Do | Why |
 |------|-----|-----|
-| **This week** | Agent tick timeouts + `Ticker` | Hung git ⇒ process looks healthy and lies forever. |
-| **This week** | Calmer default interval (2–5m) + quieter heartbeat | 30s / chatty heartbeats punish laptops and the state repo. Sticky config means one default change sticks. |
-| **This week*** | State-repo advisory lock (agent ↔ CLI) | *If the agent is installed 24/7. Only real corruption risk left. Prefer “agent busy → read on-disk snapshots.” |
-| **Next** | Path display + sort local rows | Habit friction; not architecture. |
-| **Next** | Persist stable `machine_id` in TOML | Hostname collisions are rare and silent. Nasty when they hit. |
-| **Later** | Exit codes, JSON/quiet/plain, worktrees, `doctor`, `--print-config`, CI/`go install` | Scripting and ops polish. Add when you actually pipe this or debug install twice. |
-| **Later** | Cross-machine identity by `origin` URL | Real product leap—**after** the agent is boring and trustworthy. |
-| **Never (now)** | Subcommands, setup wizard, brew/scoop, macOS LaunchAgent, ignore files, notifications, behind-upstream, fold fix-ownership, schema version, machine prune | Feature gravity. Wait for measured pain. |
+| **Next** | Exit codes, JSON/quiet/plain, worktrees, `doctor`, `--print-config`, CI/`go install` | Scripting and ops polish. Add when you actually pipe this or debug install twice. |
+| **Next** | Project × Machine matrix + `check <path>` | Cash origin correlation into the morning-scan answer. |
+| **Later** | Windows task recovery / restart-on-failure parity with systemd | Only if agent runs 24/7 on Windows |
+| **Never (now)** | Subcommands, setup wizard, brew/scoop, macOS LaunchAgent, ignore files, notifications, fold fix-ownership, schema version, machine prune | Feature gravity. Wait for measured pain. |
 
 #### What’s over-scoped
 
-**P0 is a productization wishlist, not a week.** LICENSE + module path + CI are fine hygiene; they do not unblock daily use if you build from a clone. Exit codes as P0 invents a scripting consumer. “UX hygiene” bags a 20-line sort with a help-system redesign—do path + sort, stop.
+**Packaging baseline is hygiene, not habit.** LICENSE + module path + CI do not unblock daily use if you build from a clone. Exit codes invent a scripting consumer—ship when a script exists.
 
-**P1 buries the lever under flags.** Quieter heartbeat belongs with this week’s interval change, not under `--format json`. `doctor` / `--print-config` / porcelain collapse / Windows restart parity do not increase morning use. Worktrees matter only if you use them.
+**P1 buries the lever under flags.** `doctor` / `--print-config` / porcelain collapse do not increase morning use. Worktrees matter only if you use them.
 
-Identity correlation in “medium-term” is right; elevating it into P1 polish is wrong. Don’t group paths until rows are stable and the agent isn’t lying.
+#### Missed / underweighted (landed or still relevant)
 
-#### Missed / underweighted
-
-- **Fail loud on sticky-config misconfig** — bad `state_repo` silently falling back to local-only trains distrust of aggregate views.
-- **One post-install smoke publish** — “your file landed in the state repo” beats any `doctor` command you’ll write this year.
-- **Partial/corrupt snapshot JSON** — skip + warn; one bad pull must not blank the aggregate.
+- **One post-install smoke publish** — landed; “your file landed in the state repo” beats any `doctor` you’ll write this year.
+- **Partial/corrupt snapshot JSON** — landed; skip + warn.
 - **Treat battery / state-repo history as first-class** — interval + heartbeat are the control knobs; more CLI flags are not.
-- **Don’t ship identity correlation on unsorted/ugly paths** — grouping garbage makes a worse morning scan.
+- **Don’t ship identity correlation on unsorted/ugly paths** — local sort + path display landed; matrix/`check` can proceed.
 
-**Bottom line:** Fix docs, stop hung ticks, calm the agent, lock the clone. Everything else waits until you miss it twice.
+**Bottom line:** Cash origin work into Project × Machine. Add scripting/packaging when you feel the pain twice.
 
 ---
 
 ## Short-term (1–4 weeks)
 
-Ship trust and habit. Do not expand scan surface area yet.
+Ship scripting polish and the next aggregate UX leap. Do not expand scan surface area yet.
 
 ### P0 — must land next
 
-3. **State-repo advisory lock** — serialize agent publish and CLI pull; prefer “agent busy → use on-disk snapshots” over racing `git` on one index.
-4. **Agent tick context + timeouts** — `CommandContext`, cancellable ticks; replace `time.After` with `Ticker`.
-5. **UX hygiene** — unified help/errors; fix `.` path display; sort local results by path.
-6. **Exit codes** — e.g. `0` clean (under filter), `1` usage/error, `2` attention needed; document them.
-7. **Packaging baseline** — LICENSE, module path usable with `go install`, GitHub Actions `go test` + cross-compile.
+1. **Exit codes** — e.g. `0` clean (under filter), `1` usage/error, `2` attention needed; document them.
+2. **Packaging baseline** — LICENSE, module path usable with `go install`, GitHub Actions `go test` + cross-compile.
 
 ### P1 — next polish sprint
 
-8. `--plain` / non-TTY / `NO_COLOR` for ASCII-stable output.
-9. `--quiet` when scripting or with `--output`.
-10. `--format json` (reuse snapshot/aggregate types).
-11. Detect git worktrees (`.git` file) + smoke tests.
-12. Quieter freshness (heartbeat ≈ `stale-ttl/2` or separate liveness) and calmer default interval (2–5m) with docs for aggressive 30s.
-13. Windows task recovery / restart-on-failure parity with systemd.
-14. Persist stable `machine_id` in sticky config (don’t rely on hostname alone).
-15. Post-install checklist (config path, how to verify agent, sample scan, privacy).
-16. `--print-config` / resolved values + sources (already tracked as `ConfigSource`).
-17. Collapse per-repo git calls toward `status --porcelain=v2`.
+3. `--plain` / non-TTY / `NO_COLOR` for ASCII-stable output.
+4. `--quiet` when scripting or with `--output`.
+5. `--format json` (reuse snapshot/aggregate types).
+6. Detect git worktrees (`.git` file) + smoke tests.
+7. Windows task recovery / restart-on-failure parity with systemd.
+8. Post-install checklist (config path, how to verify agent, sample scan, privacy).
+9. `--print-config` / resolved values + sources (already tracked as `ConfigSource`).
+10. Collapse per-repo git calls toward `status --porcelain=v2`.
+11. Unified help/errors (remaining UX hygiene beyond path/sort).
 
 ---
 
@@ -102,14 +93,13 @@ Make the morning scan answer: **where is unfinished work for this project?**
 
 | Theme | Ideas |
 |-------|--------|
-| **Cross-machine identity** | Correlate by normalized `origin` URL (+ basename / scan-root-relative fallback); group UI as Project × Machines |
+| **Cross-machine identity (UI)** | Project × Machine matrix; `check <path>` pre-flight; origin grouping exists — cash it into the primary view |
 | **Operability** | `doctor` / `status`: lock PID, last publish, config path, systemd/task health, reachability |
 | **Noise control** | Ignore file; optional drop of untracked-upstream from attention; sticky `exclude` globs |
 | **One binary** | Fold `fix-ownership-tool` into main CLI (`fix-ownership` / prompt on ownership errors) |
 | **Platform parity** | macOS LaunchAgent (`scheduler_other.go` is currently a hard decline) |
 | **Distribution** | goreleaser, Homebrew / Scoop / winget |
 | **Setup** | Guided wizard via `gh` (create private state repo → clone → config → scheduler → smoke publish) |
-| **Richer git signal** | Detect *behind* upstream; surface in Changes |
 | **CLI shape** | Soft subcommands (`scan`, `agent`, `config`, `doctor`) when flag soup hurts |
 | **Power users** | `--paths-only` / `-0` for fzf; wide-terminal columns |
 | **Sync hygiene** | Machine retire/prune/rename; snapshot schema `version`; orphan file cleanup |
@@ -122,7 +112,7 @@ Make the morning scan answer: **where is unfinished work for this project?**
 Stay Git-backed until measured pain (history bloat, push races, scale). Evolution path:
 
 1. **Local truth** — reliable discovery (worktrees, ignores, performance).
-2. **Shared awareness** — sticky config done; next is correlated aggregate across machines.
+2. **Shared awareness** — correlated aggregate across machines (origin plumbing done; matrix + `check` next).
 3. **Decision support** — `check <path>` pre-flight (“dirty on laptop, 2h stale”); optional notifications; shell prompt / starship snippet; editor thin client reading JSON + sticky config.
 4. **Optional light collaboration** — private state repo already enables couples/small teams; never build accounts.
 
@@ -136,32 +126,25 @@ Stay Git-backed until measured pain (history bloat, push races, scale). Evolutio
 
 | Risk | Impact |
 |------|--------|
-| Concurrent git on shared clone | Index corruption / flaky interactive pulls while agent runs |
-| Heartbeat commit volume | State repo becomes the operational bottleneck |
-| Hung git / walk | Process “running” but silently stale |
-| Hostname `machine_id` | Same ID ⇒ last writer wins across distinct machines |
-| Path-only aggregate identity | Cross-machine view is a log dump, not decision support |
 | `--redact-paths` is basename-only | Weak privacy for unique folder names |
 | Clock skew | Stale labels trust wall clocks |
 | `main.go` monolith | Slows testing scan vs sync vs display |
 | Hidden-dir skip | Repos under `.*` dirs never found |
-| README drift | Build instructions still `main.go`-only; snapshot filename docs outdated |
+| Windows agent without restart-on-failure | Agent stays down after crash until next logon |
 
 ---
 
 ## Suggested sequencing
 
 ```
-This week   Docs + timeouts/Ticker + calmer interval/heartbeat (+ state-repo lock if agent is 24/7)
+Done           State-repo lock, path/sort, stable machine_id
              ↓
-Next         Path/sort polish + stable machine_id
+Next         Exit codes / JSON / doctor / CI when you feel the pain
              ↓
-Later        Exit codes / JSON / doctor / CI when you feel the pain
-             ↓
-Then         Repo identity across machines → aggregate becomes the product
+Then         Project × Machine matrix + check <path> → aggregate becomes the product
 ```
 
-**Opinionated bottom line (reconciled):** Sync + sticky config are ahead of packaging theater. Make the agent boring and trustworthy (docs, timeouts, calm cadence, clone lock), tidy the table, then make “same repo on two machines” obvious—and this becomes a tool people leave running.
+**Opinionated bottom line (reconciled):** Sync plumbing and morning-scan table hygiene are in place. Make “same repo on two machines” obvious in the primary view, and add scripting/packaging when a real consumer appears.
 
 ---
 
@@ -169,12 +152,8 @@ Then         Repo identity across machines → aggregate becomes the product
 
 | Pri | Item | Owner lens |
 |-----|------|------------|
-| This week | Agent tick cancel/timeouts + Ticker | Systems / Pragmatic |
-| This week | Calmer default interval + quieter heartbeat | Systems / Pragmatic |
-| This week* | State-repo lock (agent ↔ CLI) if agent is 24/7 | Systems / Pragmatic |
-| Next | Path display + sort local rows | CLI / Pragmatic |
-| Next | Stable `machine_id` in sticky config | Systems / Pragmatic |
-| Later | Exit codes, JSON/quiet/plain, worktrees | CLI |
-| Later | `doctor` / `--print-config`; CI / LICENSE / `go install` | CLI / Product |
-| Later | Correlate repos by remote URL | Product |
+| Next | Exit codes, JSON/quiet/plain, worktrees | CLI |
+| Next | `doctor` / `--print-config`; CI / LICENSE / `go install` | CLI / Product |
+| Next | Project × Machine matrix + `check <path>` | Product |
+| Later | Windows restart parity | Systems |
 | Defer | macOS LaunchAgent; wizards; brew; subcommands; prune; notifications | Product |

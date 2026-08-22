@@ -56,7 +56,7 @@ WantedBy=default.target
 	}
 
 	fmt.Printf("Installed and started systemd user service %q.\n", systemdService)
-	fmt.Println("Agent settings (scan_root, interval, state_repo, …) come from sticky config.")
+	printAgentStickyConfigHint()
 	fmt.Println("Ensure lingering is enabled if the agent should run without an active login: loginctl enable-linger $USER")
 	return nil
 }
@@ -85,12 +85,4 @@ func quoteSystemd(s string) string {
 		return s
 	}
 	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
-}
-
-func resolveExecutable() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Abs(exe)
 }
