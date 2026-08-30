@@ -8,7 +8,8 @@ A Go application that scans your hard drive for git repositories and reports on 
 - ⚡ **Concurrent processing**: Uses goroutines to check repository status in parallel
 - 📊 **Detailed reporting**: Shows branch name, unstaged/staged/untracked changes, unpushed commits, and behind-upstream status
 - 💡 **Attention nudges**: Soft suggestions (commit, push, pull, branch mismatch, other-machine work) — never auto-runs git on your repos
-- ✈️ **`check <path>` pre-flight**: Compact project × machine status for one repo (scriptable exit codes)
+- ✈️ **`check <path>` pre-flight**: Compact project × machine status for one repo (scriptable exit codes + `--json`)
+- 🧩 **Editor extension**: VS Code / Cursor thin client — see [vscode-extension/](vscode-extension/)
 - 🚫 **Smart filtering**: Skips system directories and common build folders to improve performance
 - 📈 **Summary statistics**: Provides a count of clean vs. dirty repositories
 - 🎯 **Dirty-only mode**: Option to show only projects needing attention (including cross-machine situations)
@@ -184,15 +185,23 @@ Path-scoped pre-flight for the repo you are about to work in — same correlatio
 ./find-uncommitted check ~/repos/work-project
 ./find-uncommitted check .                  # from inside a repo (or subdirectory)
 ./find-uncommitted --no-remote check .      # local status only
+./find-uncommitted --json check .           # machine-readable JSON (editors / scripts)
+./find-uncommitted check --json .           # same; --json may follow check
 ```
 
 Example:
 
 ```
-github.com/you/work-project  laptop*: Dirty on feature/auth (unstaged)  ·  desktop: Clean on main
+github.com/you/work-project
+  laptop*: Dirty on feature/auth (unstaged)
+  desktop: Clean on main
 → commit or stash local changes before switching machines
 → other machine desktop has uncommitted work
 ```
+
+Local machine is listed first (`*`); each machine is on its own line.
+
+With `--json`, stdout is a single JSON object (`schemaVersion: 1`) with `ok`, `attention`, `project`, `machines[]` (including `local` / `stale` and snapshot status fields), and `situations[]` (`kind`, `nudge`, `machines`, `stale`). Non-fatal warnings stay on stderr so stdout remains parseable. On hard errors, exit is `1` and JSON (if emitted) has `ok: false` with an `error` field — never a false “clear” success. Human text remains the default without `--json`.
 
 Exit codes (check mode only):
 
@@ -202,7 +211,13 @@ Exit codes (check mode only):
 | `2` | One or more Attention situations |
 | `1` | Usage error, not a git work tree, or invalid state repo when remotes are required |
 
-Suitable for a shell `cd` hook later: `find-uncommitted check "$PWD"` (install helpers are out of scope).
+Suitable for a shell `cd` hook later: `find-uncommitted check "$PWD"` (install helpers are out of scope). Editor clients should prefer `find-uncommitted --json check <path>`.
+
+### Editor extension (VS Code / Cursor)
+
+A status-bar thin client lives in [`vscode-extension/`](vscode-extension/). It shells out to `find-uncommitted --json check` for each workspace folder — same Attention nudges as the CLI, no git mutations, no reimplemented sync.
+
+Install the Go binary first, then see [vscode-extension/README.md](vscode-extension/README.md) for compile / VSIX steps and `findUncommitted.binaryPath` when the GUI app’s `PATH` is incomplete.
 
 Output starts with an **Attention** section (soft suggestions only — no git commands are run on your repos), then a **Full inventory** table. Local rows are marked with `*` on the machine column. Stale machines are annotated in the table and summarized after output.
 

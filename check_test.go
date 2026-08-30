@@ -101,7 +101,7 @@ func TestPrintCheckNudges(t *testing.T) {
 }
 
 func TestRunCheckModeMissingPath(t *testing.T) {
-	code := runCheckMode(context.Background(), "", "laptop", "", true, 0)
+	code := runCheckMode(context.Background(), "", "laptop", "", true, 0, false)
 	if code != exitCheckError {
 		t.Fatalf("exit=%d want %d", code, exitCheckError)
 	}
@@ -126,7 +126,7 @@ func TestRunCheckModeLocalDirtyExitAttention(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	code := runCheckMode(context.Background(), dir, "test-machine", "", true, 0)
+	code := runCheckMode(context.Background(), dir, "test-machine", "", true, 0, false)
 	if code != exitCheckAttention {
 		t.Fatalf("exit=%d want %d (dirty tree should need attention)", code, exitCheckAttention)
 	}

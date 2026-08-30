@@ -73,6 +73,8 @@ func main() {
 	flag.BoolVar(&redactPaths, "redact-paths", false, "Redact full paths in published snapshots (keep basename)")
 	flag.BoolVar(&skipRemote, "no-remote", false, "Skip loading other machines' snapshots even if state repo is configured")
 	flag.IntVar(&maxWorkers, "max-workers", 0, fmt.Sprintf("Max parallel repo checks (default %d; 0 = default)", DefaultMaxWorkers))
+	var jsonOutput bool
+	flag.BoolVar(&jsonOutput, "json", false, "With check: print machine-readable JSON to stdout (human text remains default)")
 	flag.Parse()
 
 	if uninstallSched {
@@ -94,8 +96,14 @@ func main() {
 	var rootDirArg string
 	if len(args) >= 1 && args[0] == "check" {
 		checkMode = true
-		if len(args) >= 2 {
-			checkPath = args[1]
+		parsedPath, checkJSON, err := parseCheckArgs(args)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		checkPath = parsedPath
+		if checkJSON {
+			jsonOutput = true
 		}
 	} else if len(args) >= 1 {
 		rootDirArg = args[0]
@@ -197,7 +205,7 @@ func main() {
 
 	// Path-scoped pre-flight: no scan-root required.
 	if checkMode {
-		os.Exit(runCheckMode(context.Background(), checkPath, machineID, stateRepo, skipRemote, staleTTL))
+		os.Exit(runCheckMode(context.Background(), checkPath, machineID, stateRepo, skipRemote, staleTTL, jsonOutput))
 	}
 
 	var rootDir string
@@ -382,7 +390,7 @@ func main() {
 
 func printUsage() {
 	fmt.Println("Usage: find-uncommitted [flags] [directory_to_scan]")
-	fmt.Println("       find-uncommitted [flags] check <path>")
+	fmt.Println("       find-uncommitted [flags] check [--json] <path>")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  find-uncommitted C:\\code")
@@ -391,9 +399,11 @@ func printUsage() {
 	fmt.Println("  find-uncommitted --agent --state-repo D:\\state-repo --interval 2m C:\\code")
 	fmt.Println("  find-uncommitted --install-scheduler --state-repo D:\\state-repo C:\\code")
 	fmt.Println("  find-uncommitted check ~/repos/work-project")
+	fmt.Println("  find-uncommitted --json check .")
 	fmt.Println("  find-uncommitted --no-remote check .")
 	fmt.Println()
-	fmt.Println("check <path>  Pre-flight one repo (exit 0=ok, 2=attention, 1=error).")
+	fmt.Println("check [--json] <path>  Pre-flight one repo (exit 0=ok, 2=attention, 1=error).")
+	fmt.Println("  --json  Machine-readable JSON on stdout (schemaVersion 1); warnings stay on stderr.")
 	fmt.Println("After --install-scheduler, sticky config enables aggregate remotes on bare scans.")
 	fmt.Println("Install smoke-publishes one snapshot so you can confirm the state repo works.")
 	fmt.Println("Scan root may come from config when the directory argument is omitted.")

@@ -1,0 +1,75 @@
+{
+  "name": "find-uncommitted",
+  "displayName": "Find Uncommitted",
+  "description": "Cross-machine git attention nudges via the find-uncommitted CLI (status bar thin client).",
+  "version": "0.1.0",
+  "publisher": "find-uncommitted",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/davidshq/find-uncommitted.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "findUncommitted.checkWorkspace",
+        "title": "Find Uncommitted: Check Workspace"
+      },
+      {
+        "command": "findUncommitted.refresh",
+        "title": "Find Uncommitted: Refresh"
+      },
+      {
+        "command": "findUncommitted.showDetails",
+        "title": "Find Uncommitted: Show Details"
+      }
+    ],
+    "configuration": {
+      "title": "Find Uncommitted",
+      "properties": {
+        "findUncommitted.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the find-uncommitted binary. Empty = look up find-uncommitted on PATH."
+        },
+        "findUncommitted.checkOnOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run check when a workspace folder is opened (debounced)."
+        },
+        "findUncommitted.refreshIntervalMinutes": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Optional periodic refresh interval in minutes. 0 disables automatic refresh (manual / on-open only)."
+        },
+        "findUncommitted.hideWhenClear": {
+          "type": "boolean",
+          "default": false,
+          "description": "Hide the status bar item when all checked folders are clear."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node --test 'out/**/*.test.js'",
+    "package": "npx @vscode/vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.3"
+  }
+}

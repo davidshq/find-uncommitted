@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -51,18 +52,28 @@ func resolveGitToplevel(ctx context.Context, path string) (string, error) {
 }
 
 // runCheckMode live-checks one repo, correlates remotes, prints a compact
-// summary plus Attention nudges, and returns an exit code (0 / 1 / 2).
-func runCheckMode(ctx context.Context, path, machineID, stateRepo string, skipRemote bool, staleTTL time.Duration) int {
+// summary plus Attention nudges (or JSON with jsonOut), and returns exit 0 / 1 / 2.
+func runCheckMode(ctx context.Context, path, machineID, stateRepo string, skipRemote bool, staleTTL time.Duration, jsonOut bool) int {
+	fail := func(msg string) int {
+		fmt.Fprintln(os.Stderr, msg)
+		if jsonOut {
+			printCheckJSONError(strings.TrimPrefix(msg, "Error: "))
+		}
+		return exitCheckError
+	}
+
 	if strings.TrimSpace(path) == "" {
 		fmt.Fprintln(os.Stderr, "Error: check requires a path")
-		fmt.Fprintln(os.Stderr, "Usage: find-uncommitted [flags] check <path>")
+		fmt.Fprintln(os.Stderr, "Usage: find-uncommitted [flags] check [--json] <path>")
+		if jsonOut {
+			printCheckJSONError("check requires a path")
+		}
 		return exitCheckError
 	}
 
 	top, err := resolveGitToplevel(ctx, path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return exitCheckError
+		return fail(fmt.Sprintf("Error: %v", err))
 	}
 
 	status := checkRepoStatus(ctx, top)
@@ -76,6 +87,9 @@ func runCheckMode(ctx context.Context, path, machineID, stateRepo string, skipRe
 		if err := validateStateRepo(stateRepo); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			fmt.Fprintln(os.Stderr, "Fix state_repo in sticky config / env / --state-repo, or pass --no-remote for a local-only check.")
+			if jsonOut {
+				printCheckJSONError(err.Error())
+			}
 			return exitCheckError
 		}
 		if err := PullStateRepoReadOnly(ctx, SyncConfig{StateRepoDir: stateRepo, MachineID: machineID}); err != nil {
@@ -112,8 +126,15 @@ func runCheckMode(ctx context.Context, path, machineID, stateRepo string, skipRe
 	}
 
 	label := projectLabelForCheck(projectRows, status)
-	printCheckSummary(label, projectRows)
-	printCheckNudges(situations)
+	if jsonOut {
+		if err := printCheckJSON(buildCheckJSONResult(label, projectRows, situations)); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: encode JSON: %v\n", err)
+			return exitCheckError
+		}
+	} else {
+		printCheckSummary(label, projectRows)
+		printCheckNudges(situations)
+	}
 
 	if len(situations) > 0 {
 		return exitCheckAttention
@@ -131,13 +152,27 @@ func projectLabelForCheck(rows []AggregateRow, status RepoStatus) string {
 	return projectLabel(RepoStatusToSnapshot(status, false))
 }
 
-// printCheckSummary prints one compact project × machine line.
+// orderCheckRows returns a copy with local machine(s) first, then by machine id.
+func orderCheckRows(rows []AggregateRow) []AggregateRow {
+	ordered := append([]AggregateRow(nil), rows...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].Local != ordered[j].Local {
+			return ordered[i].Local
+		}
+		return ordered[i].Machine < ordered[j].Machine
+	})
+	return ordered
+}
+
+// printCheckSummary prints project label then one line per machine (local first).
 func printCheckSummary(label string, rows []AggregateRow) {
-	var parts []string
-	for _, row := range rows {
+	fmt.Println(label)
+	n := 0
+	for _, row := range orderCheckRows(rows) {
 		if row.LoadError != "" {
 			continue
 		}
+		n++
 		machine := row.Machine
 		if row.Local {
 			machine += "*"
@@ -145,21 +180,24 @@ func printCheckSummary(label string, rows []AggregateRow) {
 		if row.Stale {
 			machine += " (stale)"
 		}
-		st, ch := repoStatusText(row.Repo, true)
-		cell := st
-		if row.Repo.Branch != "" {
-			cell = fmt.Sprintf("%s on %s", st, row.Repo.Branch)
-		}
-		if ch != "" && ch != "-" {
-			cell = fmt.Sprintf("%s (%s)", cell, ch)
-		}
-		parts = append(parts, fmt.Sprintf("%s: %s", machine, cell))
+		fmt.Printf("  %s: %s\n", machine, formatCheckMachineCell(row.Repo))
 	}
-	if len(parts) == 0 {
-		fmt.Printf("%s  (no status)\n", label)
-		return
+	if n == 0 {
+		fmt.Println("  (no status)")
 	}
-	fmt.Printf("%s  %s\n", label, strings.Join(parts, "  ·  "))
+}
+
+// formatCheckMachineCell matches the plain check-summary cell (status on branch (changes)).
+func formatCheckMachineCell(repo RepoSnapshot) string {
+	st, ch := repoStatusText(repo, true)
+	cell := st
+	if repo.Branch != "" {
+		cell = fmt.Sprintf("%s on %s", st, repo.Branch)
+	}
+	if ch != "" && ch != "-" {
+		cell = fmt.Sprintf("%s (%s)", cell, ch)
+	}
+	return cell
 }
 
 // printCheckNudges prints Attention cues without repeating the project label.
