@@ -86,6 +86,9 @@ func stripGitSuffix(s string) string {
 	return s
 }
 
+// redactedOriginPrefix marks an origin that was published as a hash rather than a URL.
+const redactedOriginPrefix = "redacted:"
+
 // redactOrigin replaces a normalized origin with a short hash so snapshots can
 // still correlate the same project across machines without publishing the URL.
 func redactOrigin(origin string) string {
@@ -94,7 +97,7 @@ func redactOrigin(origin string) string {
 		return ""
 	}
 	sum := sha256.Sum256([]byte(origin))
-	return fmt.Sprintf("redacted:%x", sum[:8])
+	return fmt.Sprintf("%s%x", redactedOriginPrefix, sum[:8])
 }
 
 // pathBasenameIdentity returns parent/base for repos without origin correlation.
@@ -115,9 +118,19 @@ func pathBasenameIdentity(path string) string {
 // machines. Prefer normalized origin; for local-only repos fall back to
 // parent/basename (e.g. manuscripts/book) so same-named folders under different
 // parents do not collide, while similarly laid-out trees on two machines still match.
+//
+// Origin is always reduced to its redacted hash form. redactOrigin is a
+// deterministic hash of the normalized URL, so hashing both sides is what lets a
+// machine publishing with --redact-paths correlate with one publishing plain
+// origins. Comparing a plain URL against a hash never matches, which previously
+// split one project into two unrelated groups the moment any machine redacted.
+// The key is opaque by design; projectLabel supplies human-readable text.
 func repoCorrelationKey(repo RepoSnapshot) string {
 	if o := strings.TrimSpace(repo.Origin); o != "" {
-		return "origin:" + o
+		if strings.HasPrefix(o, redactedOriginPrefix) {
+			return "origin:" + o
+		}
+		return "origin:" + redactOrigin(o)
 	}
 	if id := pathBasenameIdentity(repo.Path); id != "" {
 		return "basename:" + id

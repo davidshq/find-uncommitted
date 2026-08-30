@@ -14,16 +14,44 @@ type WalkOptions struct {
 }
 
 // FindGitRepos walks rootDir and returns paths to git repositories.
-// A directory containing a .git folder is treated as a repo root.
+// A directory containing a .git entry is treated as a repo root: .git is a
+// directory in a normal clone and a file in a linked worktree or submodule.
 func FindGitRepos(rootDir string, opts WalkOptions) []string {
 	var repos []string
 	excludes := normalizeExcludes(opts.Excludes)
+	root := filepath.Clean(rootDir)
 
 	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			if opts.Debug {
 				fmt.Printf("[DEBUG] Skipping (error accessing): %s\n", path)
 			}
+			return nil
+		}
+
+		// Match .git before the file/dir split: a .git *file* marks a linked
+		// worktree or submodule, which is exactly where unfinished work hides.
+		if filepath.Base(path) == ".git" {
+			if opts.Debug {
+				kind := "file (worktree/submodule)"
+				if info.IsDir() {
+					kind = "directory"
+				}
+				fmt.Printf("[DEBUG] Found .git %s: %s\n", kind, path)
+			}
+			repoPath := filepath.Dir(path)
+			if shouldExcludeRepo(repoPath, excludes) {
+				if opts.Debug {
+					fmt.Printf("[DEBUG] Excluding state/sync repo: %s\n", repoPath)
+				}
+			} else {
+				repos = append(repos, repoPath)
+			}
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			// SkipDir from a file would skip the rest of the containing
+			// directory, hiding sibling entries; a file has nothing to descend.
 			return nil
 		}
 
@@ -35,22 +63,9 @@ func FindGitRepos(rootDir string, opts WalkOptions) []string {
 			fmt.Printf("[DEBUG] Visiting: %s\n", path)
 		}
 
-		if filepath.Base(path) == ".git" {
-			if opts.Debug {
-				fmt.Printf("[DEBUG] Found .git directory: %s\n", path)
-			}
-			repoPath := filepath.Dir(path)
-			if shouldExcludeRepo(repoPath, excludes) {
-				if opts.Debug {
-					fmt.Printf("[DEBUG] Excluding state/sync repo: %s\n", repoPath)
-				}
-				return filepath.SkipDir
-			}
-			repos = append(repos, repoPath)
-			return filepath.SkipDir
-		}
-
-		if shouldSkipDir(path) {
+		// Never skip the scan root itself. The user asked for it explicitly, so
+		// a hidden root (~/.dotfiles) must not silently yield zero repos.
+		if filepath.Clean(path) != root && shouldSkipDir(path) {
 			if opts.Debug {
 				fmt.Printf("[DEBUG] Skipping directory: %s\n", path)
 			}

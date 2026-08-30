@@ -80,9 +80,9 @@ func TestRepoCorrelationKey(t *testing.T) {
 
 func TestRepoStatusToSnapshotIncludesOrigin(t *testing.T) {
 	status := RepoStatus{
-		Path:   "/code/app",
-		Origin: "github.com/acme/app",
-		Branch: "main",
+		Path:    "/code/app",
+		Origin:  "github.com/acme/app",
+		Branch:  "main",
 		IsClean: true,
 	}
 	snap := RepoStatusToSnapshot(status, false)

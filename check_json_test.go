@@ -106,7 +106,6 @@ func TestFormatCheckMachineCell(t *testing.T) {
 	}
 }
 
-
 func TestRunCheckModeJSONClear(t *testing.T) {
 	dir := initEmptyCommitRepo(t)
 	stdout, code := captureCheckJSON(t, dir, "m1", true)

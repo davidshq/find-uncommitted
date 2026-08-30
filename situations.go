@@ -12,15 +12,15 @@ import (
 type SituationKind string
 
 const (
-	SituationLocalError              SituationKind = "local_error"
-	SituationLocalDirty              SituationKind = "local_dirty"
-	SituationLocalUnpushed           SituationKind = "local_unpushed"
-	SituationLocalBehind             SituationKind = "local_behind"
-	SituationLocalUntrackedUpstream  SituationKind = "local_untracked_upstream"
-	SituationBranchMismatch          SituationKind = "branch_mismatch"
-	SituationTipMismatch             SituationKind = "tip_mismatch"
-	SituationOtherMachineWork        SituationKind = "other_machine_work"
-	SituationStaleEvidence           SituationKind = "stale_evidence"
+	SituationLocalError             SituationKind = "local_error"
+	SituationLocalDirty             SituationKind = "local_dirty"
+	SituationLocalUnpushed          SituationKind = "local_unpushed"
+	SituationLocalBehind            SituationKind = "local_behind"
+	SituationLocalUntrackedUpstream SituationKind = "local_untracked_upstream"
+	SituationBranchMismatch         SituationKind = "branch_mismatch"
+	SituationTipMismatch            SituationKind = "tip_mismatch"
+	SituationOtherMachineWork       SituationKind = "other_machine_work"
+	SituationStaleEvidence          SituationKind = "stale_evidence"
 )
 
 // situationPriority orders Attention output (lower = higher priority).
@@ -78,6 +78,11 @@ func GroupRowsByProject(rows []AggregateRow) []ProjectGroup {
 		label := projectLabel(row.Repo)
 		if i, ok := index[key]; ok {
 			groups[i].Rows = append(groups[i].Rows, row)
+			// A group can mix machines that redact with machines that do not;
+			// show the most legible label any of them contributed.
+			if projectLabelRank(label) < projectLabelRank(groups[i].Label) {
+				groups[i].Label = label
+			}
 			continue
 		}
 		index[key] = len(groups)
@@ -93,9 +98,22 @@ func GroupRowsByProject(rows []AggregateRow) []ProjectGroup {
 	return groups
 }
 
+// projectLabelRank orders label legibility (lower is better): a plain origin or
+// path beats a basename salvaged from a redacted row, which beats a bare hash.
+func projectLabelRank(label string) int {
+	switch {
+	case strings.HasPrefix(label, redactedOriginPrefix):
+		return 2
+	case strings.HasSuffix(label, " (redacted origin)"):
+		return 1
+	default:
+		return 0
+	}
+}
+
 func projectLabel(repo RepoSnapshot) string {
 	if o := strings.TrimSpace(repo.Origin); o != "" {
-		if strings.HasPrefix(o, "redacted:") {
+		if strings.HasPrefix(o, redactedOriginPrefix) {
 			base := filepath.Base(repo.Path)
 			if base != "" && base != "." && base != "…" {
 				return base + " (redacted origin)"
@@ -131,16 +149,36 @@ func DetectSituations(rows []AggregateRow) []Situation {
 	return out
 }
 
+// localTreeSuffix disambiguates one working tree when this machine holds several
+// for the same project — linked worktrees and submodules share their origin, so
+// they correlate into a single group.
+func localTreeSuffix(locals []AggregateRow, row AggregateRow) string {
+	if len(locals) < 2 || row.Repo.Path == "" {
+		return ""
+	}
+	return fmt.Sprintf(" [%s]", row.Repo.Path)
+}
+
 func detectGroupSituations(g ProjectGroup) []Situation {
-	var local *AggregateRow
+	// A project can have more than one local working tree (linked worktrees,
+	// submodules). Keeping only the last one silently dropped the others'
+	// cues — a dirty worktree beside a clean clone reported "nothing needing
+	// attention" while the inventory showed it as dirty.
+	var locals []AggregateRow
 	var remote []AggregateRow
-	for i := range g.Rows {
-		row := g.Rows[i]
+	for _, row := range g.Rows {
 		if row.Local {
-			local = &g.Rows[i]
+			locals = append(locals, row)
 		} else {
 			remote = append(remote, row)
 		}
+	}
+
+	// Cross-machine comparisons use one representative tree. Rows arrive sorted
+	// by path, so this is deterministic rather than iteration-order dependent.
+	var local *AggregateRow
+	if len(locals) > 0 {
+		local = &locals[0]
 	}
 
 	var situations []Situation
@@ -152,15 +190,17 @@ func detectGroupSituations(g ProjectGroup) []Situation {
 		}
 	}
 
-	if local != nil {
-		repo := local.Repo
+	// Local cues are per working tree, so every local row gets its own.
+	for _, l := range locals {
+		repo := l.Repo
+		where := localTreeSuffix(locals, l)
 		if repo.Error != "" && !repo.IsEmpty {
 			situations = append(situations, Situation{
 				Kind:         SituationLocalError,
 				ProjectKey:   g.Key,
 				ProjectLabel: g.Label,
-				Nudge:        "fix local git error: " + repo.Error,
-				Machines:     []string{local.Machine},
+				Nudge:        "fix local git error: " + repo.Error + where,
+				Machines:     []string{l.Machine},
 			})
 		}
 		if repo.Error == "" && repo.IsDirty {
@@ -168,8 +208,8 @@ func detectGroupSituations(g ProjectGroup) []Situation {
 				Kind:         SituationLocalDirty,
 				ProjectKey:   g.Key,
 				ProjectLabel: g.Label,
-				Nudge:        "commit or stash local changes before switching machines",
-				Machines:     []string{local.Machine},
+				Nudge:        "commit or stash local changes before switching machines" + where,
+				Machines:     []string{l.Machine},
 			})
 		}
 		if repo.Error == "" && repo.HasUnpushed {
@@ -181,8 +221,8 @@ func detectGroupSituations(g ProjectGroup) []Situation {
 				Kind:         SituationLocalUnpushed,
 				ProjectKey:   g.Key,
 				ProjectLabel: g.Label,
-				Nudge:        nudge,
-				Machines:     []string{local.Machine},
+				Nudge:        nudge + where,
+				Machines:     []string{l.Machine},
 			})
 		}
 		if repo.Error == "" && repo.HasBehind {
@@ -194,8 +234,8 @@ func detectGroupSituations(g ProjectGroup) []Situation {
 				Kind:         SituationLocalBehind,
 				ProjectKey:   g.Key,
 				ProjectLabel: g.Label,
-				Nudge:        nudge,
-				Machines:     []string{local.Machine},
+				Nudge:        nudge + where,
+				Machines:     []string{l.Machine},
 			})
 		}
 		if repo.Error == "" && repo.HasUntrackedUpstream {
@@ -203,8 +243,8 @@ func detectGroupSituations(g ProjectGroup) []Situation {
 				Kind:         SituationLocalUntrackedUpstream,
 				ProjectKey:   g.Key,
 				ProjectLabel: g.Label,
-				Nudge:        "set upstream tracking (or push -u) so ahead/behind status is meaningful",
-				Machines:     []string{local.Machine},
+				Nudge:        "set upstream tracking (or push -u) so ahead/behind status is meaningful" + where,
+				Machines:     []string{l.Machine},
 			})
 		}
 	}
@@ -281,53 +321,68 @@ func detectGroupSituations(g ProjectGroup) []Situation {
 		}
 	}
 
+	// Remote work is reported whatever the local state. Gating this on a clean
+	// local copy suppressed the cue in the one case that matters most: both
+	// machines dirty in the same project, which is the collision this tool exists
+	// to prevent. A dirty local repo only earned "stash your changes" before.
 	if local != nil {
-		localClean := local.Repo.Error == "" && !snapshotNeedsAttention(local.Repo)
-		if localClean {
-			var dirtyMachines []string
-			var unpushedMachines []string
-			var workStale bool
-			for _, r := range remote {
-				if r.Repo.Error != "" {
-					continue
+		var dirtyMachines []string
+		var unpushedMachines []string
+		var workStale bool
+		for _, r := range remote {
+			if r.Repo.Error != "" {
+				continue
+			}
+			if r.Repo.IsDirty {
+				dirtyMachines = append(dirtyMachines, formatMachineLabel(r))
+				if r.Stale {
+					workStale = true
 				}
-				if r.Repo.IsDirty {
-					dirtyMachines = append(dirtyMachines, formatMachineLabel(r))
-					if r.Stale {
-						workStale = true
-					}
-				} else if r.Repo.HasUnpushed {
-					unpushedMachines = append(unpushedMachines, formatMachineLabel(r))
-					if r.Stale {
-						workStale = true
-					}
+			} else if r.Repo.HasUnpushed {
+				unpushedMachines = append(unpushedMachines, formatMachineLabel(r))
+				if r.Stale {
+					workStale = true
 				}
 			}
-			var parts []string
-			if len(dirtyMachines) > 0 {
-				parts = append(parts, fmt.Sprintf("uncommitted work on %s (pull will not get those changes — commit/push there or continue on that machine)",
-					strings.Join(dirtyMachines, ", ")))
-			}
-			if len(unpushedMachines) > 0 {
-				parts = append(parts, fmt.Sprintf("unpushed commits on %s — pull after they push, or continue there",
-					strings.Join(unpushedMachines, ", ")))
-			}
-			if len(parts) > 0 {
-				nudge := "other machine has " + strings.Join(parts, "; ")
-				if workStale {
-					nudge += " (snapshot may be stale)"
+		}
+		var parts []string
+		if len(dirtyMachines) > 0 {
+			parts = append(parts, fmt.Sprintf("uncommitted work on %s (pull will not get those changes — commit/push there or continue on that machine)",
+				strings.Join(dirtyMachines, ", ")))
+		}
+		if len(unpushedMachines) > 0 {
+			parts = append(parts, fmt.Sprintf("unpushed commits on %s — pull after they push, or continue there",
+				strings.Join(unpushedMachines, ", ")))
+		}
+		if len(parts) > 0 {
+			anyLocalDirty := false
+			for _, l := range locals {
+				if l.Repo.Error == "" && l.Repo.IsDirty {
+					anyLocalDirty = true
+					break
 				}
-				machines := append([]string{}, dirtyMachines...)
-				machines = append(machines, unpushedMachines...)
-				situations = append(situations, Situation{
-					Kind:         SituationOtherMachineWork,
-					ProjectKey:   g.Key,
-					ProjectLabel: g.Label,
-					Nudge:        nudge,
-					Machines:     machines,
-					Stale:        workStale,
-				})
 			}
+			nudge := "other machine has " + strings.Join(parts, "; ")
+			if anyLocalDirty && len(dirtyMachines) > 0 {
+				nudge = fmt.Sprintf("uncommitted work on BOTH sides — here and on %s; resolve one side before editing both",
+					strings.Join(dirtyMachines, ", "))
+				if len(unpushedMachines) > 0 {
+					nudge += fmt.Sprintf("; also unpushed commits on %s", strings.Join(unpushedMachines, ", "))
+				}
+			}
+			if workStale {
+				nudge += " (snapshot may be stale)"
+			}
+			machines := append([]string{}, dirtyMachines...)
+			machines = append(machines, unpushedMachines...)
+			situations = append(situations, Situation{
+				Kind:         SituationOtherMachineWork,
+				ProjectKey:   g.Key,
+				ProjectLabel: g.Label,
+				Nudge:        nudge,
+				Machines:     machines,
+				Stale:        workStale,
+			})
 		}
 	}
 

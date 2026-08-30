@@ -127,11 +127,13 @@ When config supplies `state_repo`, the CLI prints a short stderr notice and aggr
 
 **Migration:** If you installed the scheduler before sticky config existed, re-run `--install-scheduler` once (or create the TOML file manually). Until then, interactive scans stay local-only unless you pass `--state-repo`.
 
-If your sticky config still has `stale_ttl = "5m"` from an older install, bump it to `30m` (or at least ~2× `heartbeat`). Newer defaults use a `15m` heartbeat when unset; leaving `stale_ttl` at `5m` makes healthy machines look stale for most of each heartbeat window.
+If your sticky config still has `stale_ttl = "5m"` from an older install, bump it to `30m`, or set an explicit `heartbeat` so `stale_ttl` is at least ~2× it (e.g. `heartbeat = "2m"` with `stale_ttl = "5m"`). Newer defaults use a `15m` heartbeat when unset; leaving `stale_ttl` at `5m` makes healthy machines look stale for most of each heartbeat window.
 
 ### Privacy warning
 
-Snapshots can include repository **paths**, **branch names**, and normalized **`origin`** URLs (org/repo identity). Keep the state repository private. Use `--redact-paths` if you want basenames only for paths and a stable hash instead of the origin URL (correlation across machines still works because the hash is deterministic). Agent logs intentionally avoid dumping full snapshot payloads.
+Snapshots can include repository **paths**, **branch names**, and normalized **`origin`** URLs (org/repo identity). Keep the state repository private. Use `--redact-paths` if you want basenames only for paths and a stable hash instead of the origin URL. Agent logs intentionally avoid dumping full snapshot payloads.
+
+Correlation survives redaction, and machines may mix settings: repositories are matched on the **hashed** origin on both sides, so a machine publishing with `--redact-paths` still lines up with one publishing plain URLs, and the project keeps its readable label wherever any machine supplies one. The exception is a repo with **no `origin` remote**, which falls back to `parent/basename` matching — redaction reduces that to the basename alone, so purely local repos correlate less precisely across a redaction boundary.
 
 ### Setup
 
@@ -426,7 +428,7 @@ cd ..
 ## How it works
 
 1. **Directory Scanning**: Uses `filepath.Walk` to recursively scan the specified directory
-2. **Git Detection**: Looks for `.git` directories to identify git repositories
+2. **Git Detection**: Looks for `.git` entries to identify git repositories — a `.git` **directory** (normal clone) or a `.git` **file** (linked worktree or submodule), so worktrees are scanned too
 3. **Status Checking**: For each repository found, runs git commands to check:
    - Current branch and short HEAD SHA
    - Unstaged changes (`git diff --name-only`)
@@ -440,7 +442,8 @@ cd ..
 
 ## Performance Notes
 
-- The application skips common system directories and build folders to improve scanning speed
+- The application skips common system directories, hidden (dot) directories, and build folders to improve scanning speed
+- The scan root itself is never skipped, so a hidden root such as `~/.dotfiles` is scanned normally; the dot rule only applies to directories *below* the root
 - Repo status checks run in parallel, capped at **8 workers** by default (`max_workers` in sticky config, `--max-workers`, or `FIND_UNCOMMITTED_MAX_WORKERS`) to avoid overloading git and the filesystem
 - Each git subprocess has a **30s** deadline; under heavy load a repo may report `git timed out or cancelled` instead of a false "invalid repository" error
 - Large scan roots may take several minutes to scan completely

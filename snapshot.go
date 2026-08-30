@@ -37,10 +37,10 @@ type RepoSnapshot struct {
 
 // ScanMetadata captures high-level stats from one publish tick.
 type ScanMetadata struct {
-	RepoCount  int   `json:"repo_count"`
-	DirtyCount int   `json:"dirty_count"`
-	ErrorCount int   `json:"error_count"`
-	DurationMs int64 `json:"duration_ms"`
+	RepoCount  int    `json:"repo_count"`
+	DirtyCount int    `json:"dirty_count"`
+	ErrorCount int    `json:"error_count"`
+	DurationMs int64  `json:"duration_ms"`
 	ScanRoot   string `json:"scan_root"`
 }
 

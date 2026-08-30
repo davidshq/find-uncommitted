@@ -267,7 +267,10 @@ func TestFilterRowsByProjectKeys(t *testing.T) {
 		{Machine: "b", Repo: RepoSnapshot{Path: "/b/other", Origin: "github.com/acme/other", Branch: "main"}},
 		{LoadError: "bad", Machine: "broken.json"},
 	}
-	keys := map[string]bool{"origin:github.com/acme/app": true}
+	// Derive the key rather than hardcoding its shape: it is an opaque hash.
+	keys := map[string]bool{
+		repoCorrelationKey(RepoSnapshot{Path: "/a/app", Origin: "github.com/acme/app"}): true,
+	}
 	got := FilterRowsByProjectKeys(rows, keys)
 	if len(got) != 2 {
 		t.Fatalf("expected app row + load error, got %d: %+v", len(got), got)

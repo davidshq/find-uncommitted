@@ -250,15 +250,23 @@ func TestBuildAggregateRowsSortsByOrigin(t *testing.T) {
 	if len(rows) != 3 {
 		t.Fatalf("expected 3 rows, got %d: %+v", len(rows), rows)
 	}
-	// Same origin should be adjacent regardless of machine/path.
-	if rows[0].Repo.Origin != "github.com/acme/app" || rows[1].Repo.Origin != "github.com/acme/app" {
-		t.Fatalf("expected app origin rows first (correlated), got %+v", rows)
+	// Same origin must be adjacent regardless of machine/path. Assert clustering
+	// rather than absolute position: correlation keys are opaque hashes, so which
+	// project sorts first is deliberately not part of the contract.
+	var appIdx []int
+	for i, row := range rows {
+		if row.Repo.Origin == "github.com/acme/app" {
+			appIdx = append(appIdx, i)
+		}
 	}
-	if rows[0].Machine == rows[1].Machine {
+	if len(appIdx) != 2 {
+		t.Fatalf("expected 2 app rows, got %d: %+v", len(appIdx), rows)
+	}
+	if appIdx[1] != appIdx[0]+1 {
+		t.Fatalf("expected app rows adjacent (correlated), got %+v at %v", rows, appIdx)
+	}
+	if rows[appIdx[0]].Machine == rows[appIdx[1]].Machine {
 		t.Fatalf("expected app rows from different machines: %+v", rows)
-	}
-	if rows[2].Repo.Origin != "github.com/acme/other" {
-		t.Fatalf("expected other last, got %+v", rows)
 	}
 }
 

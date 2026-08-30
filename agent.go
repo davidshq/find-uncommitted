@@ -35,10 +35,10 @@ const DefaultStaleTTL = 30 * time.Minute
 
 // DefaultIntervalString / DefaultStaleTTLString are Go duration strings for flags and sticky config.
 const (
-	DefaultIntervalString     = "2m"
-	DefaultStaleTTLString     = "30m"
-	DefaultHeartbeatString    = "15m"
-	DefaultTickTimeoutString  = "2m"
+	DefaultIntervalString    = "2m"
+	DefaultStaleTTLString    = "30m"
+	DefaultHeartbeatString   = "15m"
+	DefaultTickTimeoutString = "2m"
 )
 
 // agentLock holds an exclusive flock-style lock file for the agent process.

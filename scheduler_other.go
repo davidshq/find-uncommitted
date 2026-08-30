@@ -14,7 +14,3 @@ func installScheduler(_ string) error {
 func uninstallScheduler() error {
 	return fmt.Errorf("scheduler uninstall is not supported on %s (Windows and Linux only in this release)", runtime.GOOS)
 }
-
-func resolveExecutable() (string, error) {
-	return "", fmt.Errorf("scheduler helpers unavailable on this platform")
-}
