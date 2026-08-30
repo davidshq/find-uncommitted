@@ -9,6 +9,7 @@
 - Ship a VS Code-compatible extension (works in Cursor) that shows cross-machine check status for workspace folders
 - Add stable JSON output to `check` so the extension never scrapes human text
 - Match the product posture: nudge, don’t strong-arm; other-machine divergence is the loud cue; local dirt stays quieter
+- Make cross-machine attention hard to miss by default (stock VS Code warning notification), with a setting to prefer status-bar-only
 - Soft-fail when the binary is missing or the folder isn’t a git work tree
 
 **Non-Goals:**
@@ -16,6 +17,7 @@
 - Reimplement scanning, agent, or state-repo sync in TypeScript
 - Full Project × Machine morning matrix (Fork B) inside the editor
 - OS notifications, auto git mutations, or auto-installing shell hooks
+- Custom Webview / editor “banner” chrome or persistent decorations as a first surface
 - Marketplace publishing / branding polish as a prerequisite for local use
 - Bundling or downloading the Go binary inside the VSIX (user installs CLI separately)
 
@@ -32,15 +34,21 @@
    - Exit codes remain authoritative; extension maps `2` → attention UI, `1` → error/setup, `0` → clear.
    - *Alternative:* NDJSON or separate files — rejected; one shot per folder is enough.
 
-3. **Primary UI = status bar item; detail on demand**
-   - One status-bar item (or one per multi-root folder if needed) with a short glyph/text.
-   - Hover / “Show Check Details” command shows the summary line + nudges (Output channel or InformationMessage).
-   - Two-tier styling: cross-machine situation kinds (`other_machine_work`, `branch_mismatch`, `tip_mismatch`, `stale_evidence` when tied to remote work) elevate warning/emphasis; pure local dirty/unpushed use quieter text.
-   - *Alternative:* always-on Webview panel — deferred; too heavy for “ambient.”
+3. **Dual-surface attention UI: VS Code notification default, status bar always ambient**
+   - Use the usual editor notification surface: `window.showWarningMessage` (non-modal) for **cross-machine** attention, with action buttons: **Show Details**, **Open Settings**, **Dismiss**. Do not invent a custom “banner” UI — same pattern as other VS Code / Cursor extensions.
+   - Status bar remains always-on ambient: short glyph/text; hover / “Show Check Details” shows summary + nudges (Output channel).
+   - Setting `findUncommitted.attentionDisplay`: `"notification"` | `"statusBar"` — **default `"notification"`**. When `"statusBar"`, skip the warning notification and rely on the footer only (quiet posture for users who prefer it).
+   - **Open Settings** opens the Find Uncommitted settings filtered to `attentionDisplay` so choosing the subtle footer is one click from the notification.
+   - **Dismiss** (or closing the notification) suppresses re-showing the same notification for the current attention episode (same aggregated cross-machine fingerprint / until outcome clears). A later clear→attention transition, or a materially different nudge set, may show it again. Timer refreshes that keep the same attention MUST NOT re-spam.
+   - Two-tier styling unchanged: cross-machine kinds (`other_machine_work`, `branch_mismatch`, `tip_mismatch`, `stale_evidence` when tied to remote work) drive notification + elevated status bar; pure local dirty/unpushed stay status-bar-quiet (no notification).
+   - Setup / missing binary: elevated status bar only (no recurring notification) — one clear footer cue is enough.
+   - *Alternative:* status-bar-only as default — rejected; too easy to miss for the Fork A cross-machine habit.
+   - *Alternative:* always-on Webview panel or custom banner chrome — deferred / rejected; stock notifications are enough.
+   - *Alternative:* OS-level notifications — rejected (non-goal); editor-local only.
 
 4. **Triggers: open + manual + light refresh**
    - Run check when a workspace folder is added/opened (debounced).
-   - Command palette: “Find Uncommitted: Check Workspace”, “Refresh”, “Reveal Output”.
+   - Command palette: “Find Uncommitted: Check Workspace”, “Refresh”, “Show Details”.
    - Optional timer refresh (default off or long interval, e.g. 5–15m) so we don’t burn CPU on every keystroke.
    - *Not* on every save — that fights the nudge posture and races the agent.
 
@@ -54,7 +62,7 @@
 
 7. **Multi-root workspaces**
    - Check each `workspace.workspaceFolders` entry that resolves as a git work tree; skip non-git folders silently (CLI exit `1` for “not a repo” → no status item noise, or a single debug log).
-   - Aggregate status bar: if any folder has cross-machine attention, that wins the glyph; else if any local attention, quieter cue; else clear/hidden.
+   - Aggregate surfaces: if any folder has cross-machine attention, that wins the notification (when enabled) and status-bar glyph; else if any local attention, quieter status-bar cue only; else clear/hidden.
 
 ## Risks / Trade-offs
 
@@ -62,17 +70,19 @@
 - **[PATH / GUI apps]** Editors launched from a dock may lack shell `PATH` → document setting override; consider expanding `~/.local/bin` on Linux/macOS as a soft fallback later if needed.
 - **[Schema drift]** Extension breaks if JSON fields rename → version field in JSON (`schemaVersion: 1`); keep additive-only changes for v1.
 - **[False calm]** Stale remote snapshots can under-warn → surface `stale` on machine cells and situation.stale in UI copy (CLI already labels this).
-- **[Scope creep]** Matrix / notifications tempt feature expansion → keep non-goals visible; extension only consumes `check`.
+- **[Scope creep]** Matrix / OS notifications tempt feature expansion → keep non-goals visible; extension only consumes `check` and uses stock editor notifications.
+- **[Notification fatigue]** Default warning notification can annoy if re-shown on every refresh → episode fingerprint + dismiss; setting to switch to `"statusBar"`; Open Settings action on the notification itself.
 
 ## Migration Plan
 
 1. Land `--json` on `check` with tests; human mode unchanged.
 2. Scaffold extension; parse JSON; status bar + commands.
-3. Dogfood locally via “Install from VSIX” / `code --install-extension` / Cursor equivalent.
-4. Rollback: uninstall extension; CLI unchanged if JSON is additive.
+3. Add `attentionDisplay` (default `notification`) and dismissible cross-machine warning notification with Open Settings / Show Details / Dismiss. (Rename any earlier `"banner"` enum value to `"notification"`.)
+4. Dogfood locally via “Install from VSIX” / `code --install-extension` / Cursor equivalent — verify notification on other-machine work and that `"statusBar"` restores footer-only.
+5. Rollback: uninstall extension; CLI unchanged if JSON is additive.
 
 ## Open Questions
 
-- Exact status-bar glyph set (plain text vs codicons) — pick something boring and readable; no need to mirror Starship until Fork A prompt work exists.
+- Exact status-bar glyph set (plain text vs codicons) — pick something boring and readable; notification body uses CLI nudge text. No need to mirror Starship until Fork A prompt work exists.
 - Whether Cursor needs any extra activation events beyond standard VS Code — assume VS Code API compatibility unless dogfood shows otherwise.
-- Optional: expose `findUncommitted.checkOnOpen` boolean (default true) — yes unless it proves noisy.
+- `findUncommitted.checkOnOpen` boolean (default true) — already decided yes unless dogfood proves noisy.

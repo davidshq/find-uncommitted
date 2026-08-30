@@ -1,6 +1,6 @@
 # Find Uncommitted — VS Code / Cursor extension
 
-Thin client for the [find-uncommitted](https://github.com/davidshq/find-uncommitted) CLI. It runs `find-uncommitted --json check` on workspace folders and shows a status-bar nudge. It does **not** scan, sync, or run git mutations.
+Thin client for the [find-uncommitted](https://github.com/davidshq/find-uncommitted) CLI. It runs `find-uncommitted --json check` on workspace folders and shows status-bar + optional VS Code warning notifications. It does **not** scan, sync, or run git mutations.
 
 ## Prerequisites
 
@@ -34,9 +34,10 @@ npm run package
 
 1. Install the VSIX (or F5) in VS Code or Cursor.
 2. Open a git workspace that has sticky state-repo remotes configured.
-3. Confirm **FU · ok** or quiet **FU · dirty** for local-only dirt.
-4. With unfinished work published from another machine, confirm elevated **⚠ FU · \<machine\>** and Show Details nudges.
-5. Unset `PATH` / wrong `binaryPath` → **FU · setup** without a crash loop (configured vs PATH messages differ).
+3. Confirm **FU · ok** or quiet **FU · dirty** for local-only dirt (no notification).
+4. With unfinished work published from another machine, confirm elevated **⚠ FU · \<machine\>** and a **dismissible warning notification** (default) with Show Details / Open Settings / Dismiss.
+5. Set `findUncommitted.attentionDisplay` to `statusBar` → refresh → notification gone, status bar still elevated.
+6. Unset `PATH` / wrong `binaryPath` → **FU · setup** without a crash loop (configured vs PATH messages differ).
 
 ## Commands
 
@@ -56,6 +57,17 @@ Each `check` subprocess is killed after **30s** so a stuck state-repo pull canno
 | `findUncommitted.checkOnOpen` | `true` | Debounced check when folders open |
 | `findUncommitted.refreshIntervalMinutes` | `0` | Periodic refresh; `0` = off |
 | `findUncommitted.hideWhenClear` | `false` | Hide status item when clear |
+| `findUncommitted.attentionDisplay` | `"notification"` | `"notification"` = usual VS Code warning notification for cross-machine attention (plus status bar); `"statusBar"` = subtle footer only |
+
+## Attention surfaces
+
+By default, **cross-machine** attention uses the usual VS Code warning notification with:
+
+- **Show Details** — Output channel with nudges  
+- **Open Settings** — jump to `attentionDisplay` to prefer the status bar only  
+- **Dismiss** — hide for this attention episode (refreshes with the same cue won’t re-spam)
+
+Local-only dirty stays on the status bar. Switch to `"statusBar"` if you want the quieter footer for everything.
 
 ## Status tiers
 

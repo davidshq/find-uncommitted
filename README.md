@@ -215,7 +215,7 @@ Suitable for a shell `cd` hook later: `find-uncommitted check "$PWD"` (install h
 
 ### Editor extension (VS Code / Cursor)
 
-A status-bar thin client lives in [`vscode-extension/`](vscode-extension/). It shells out to `find-uncommitted --json check` for each workspace folder — same Attention nudges as the CLI, no git mutations, no reimplemented sync.
+A thin client lives in [`vscode-extension/`](vscode-extension/). It shells out to `find-uncommitted --json check` for each workspace folder — same Attention nudges as the CLI, no git mutations, no reimplemented sync. Cross-machine attention defaults to a usual VS Code warning notification plus status bar; set `findUncommitted.attentionDisplay` to `statusBar` for the subtle footer only.
 
 Install the Go binary first, then see [vscode-extension/README.md](vscode-extension/README.md) for compile / VSIX steps and `findUncommitted.binaryPath` when the GUI app’s `PATH` is incomplete.
 

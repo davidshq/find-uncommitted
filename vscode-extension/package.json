@@ -56,6 +56,15 @@
           "type": "boolean",
           "default": false,
           "description": "Hide the status bar item when all checked folders are clear."
+        },
+        "findUncommitted.attentionDisplay": {
+          "type": "string",
+          "enum": [
+            "notification",
+            "statusBar"
+          ],
+          "default": "notification",
+          "description": "How to surface cross-machine attention. \"notification\" (default) uses the usual VS Code warning notification plus the status bar; \"statusBar\" uses only the subtle status-bar footer. Legacy value \"banner\" is treated as \"notification\"."
         }
       }
     }

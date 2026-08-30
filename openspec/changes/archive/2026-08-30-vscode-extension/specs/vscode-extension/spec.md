@@ -16,7 +16,7 @@ The VS Code-compatible extension SHALL invoke the installed `find-uncommitted` b
 - **THEN** the extension does not treat that as a hard failure of the whole extension (no repeated error spam); it skips or quietly records that folder
 
 ### Requirement: Status bar ambient signal
-The extension SHALL expose a status bar indicator reflecting the latest check outcome. Cross-machine attention (situations such as other-machine work, branch mismatch, or tip mismatch) SHALL be visually more prominent than local-only dirty/unpushed/behind cues. When all checked folders are clear (exit `0`, no situations), the indicator SHALL show a quiet clear state or hide according to extension settings.
+The extension SHALL expose a status bar indicator reflecting the latest check outcome. Cross-machine attention (situations such as other-machine work, branch mismatch, or tip mismatch) SHALL be visually more prominent than local-only dirty/unpushed/behind cues. When all checked folders are clear (exit `0`, no situations), the indicator SHALL show a quiet clear state or hide according to extension settings. The status bar SHALL remain available regardless of `findUncommitted.attentionDisplay`.
 
 #### Scenario: Other machine needs attention
 - **WHEN** check JSON reports a cross-machine situation while local may be clean
@@ -30,8 +30,31 @@ The extension SHALL expose a status bar indicator reflecting the latest check ou
 - **WHEN** the user runs the extension’s refresh or check command
 - **THEN** the extension re-runs check and updates the status bar from the new result
 
+### Requirement: Dismissible attention notification
+The extension SHALL support `findUncommitted.attentionDisplay` with values `notification` and `statusBar`, defaulting to `notification`. When the setting is `notification` and check reports cross-machine attention, the extension SHALL show a non-modal VS Code warning notification (`window.showWarningMessage`) that includes nudge text and action buttons for Show Details, Open Settings, and Dismiss — the usual editor notification UI, not a custom banner. When the setting is `statusBar`, the extension MUST NOT show that warning notification for attention outcomes and SHALL rely on the status bar (and detail commands) only. Local-only attention MUST NOT trigger the notification. After Dismiss, the extension MUST NOT re-show the same notification for the same attention episode on subsequent refreshes that keep equivalent cross-machine attention; a clear-then-attention transition or a materially different attention set MAY show the notification again. Open Settings SHALL open the Find Uncommitted configuration focused on `attentionDisplay` (or the extension’s settings section that includes it).
+
+#### Scenario: Notification on cross-machine attention (default)
+- **WHEN** `attentionDisplay` is `notification` (or unset) and check reports cross-machine attention
+- **THEN** the extension shows a dismissible warning notification with Show Details, Open Settings, and Dismiss actions
+
+#### Scenario: Status-bar-only mode
+- **WHEN** the user sets `findUncommitted.attentionDisplay` to `statusBar` and check reports cross-machine attention
+- **THEN** the extension does not show the warning notification and still updates the elevated status bar
+
+#### Scenario: Local dirty does not notify
+- **WHEN** check reports only local dirty/unpushed/behind-style situations
+- **THEN** the extension does not show the attention notification
+
+#### Scenario: Dismiss suppresses re-spam
+- **WHEN** the user dismisses the notification and a later refresh reports the same cross-machine attention episode
+- **THEN** the extension does not show the notification again until attention clears or the attention set changes materially
+
+#### Scenario: Open Settings from notification
+- **WHEN** the user chooses Open Settings on the notification
+- **THEN** the editor opens Find Uncommitted settings so the user can switch `attentionDisplay` to `statusBar`
+
 ### Requirement: Nudge-only posture
-The extension MUST NOT automatically commit, push, pull, stash, or otherwise mutate git repositories. It MUST NOT enable OS-level notifications by default. Detail surfaces (hover, command, or output channel) SHALL present nudge text from the CLI situations and MUST NOT execute suggested git commands on the user’s behalf.
+The extension MUST NOT automatically commit, push, pull, stash, or otherwise mutate git repositories. It MUST NOT enable OS-level notifications by default. Detail surfaces (hover, command, output channel, or notification actions) SHALL present nudge text from the CLI situations and MUST NOT execute suggested git commands on the user’s behalf.
 
 #### Scenario: Showing details does not run git mutations
 - **WHEN** the user opens check details from the extension

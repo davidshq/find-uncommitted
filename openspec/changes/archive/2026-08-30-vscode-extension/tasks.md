@@ -24,4 +24,12 @@
 ## 4. Docs + dogfood
 
 - [x] 4.1 Short “Editor extension” section in root README linking to `vscode-extension/`
-- [ ] 4.2 Manual dogfood: install extension in VS Code or Cursor against a multi-machine project; verify elevated cue for other-machine work and quiet local dirty
+- [ ] 4.2 Manual dogfood: install extension in VS Code or Cursor against a multi-machine project; verify elevated cue for other-machine work, quiet local dirty, default VS Code warning notification on cross-machine attention, and that `attentionDisplay: statusBar` restores footer-only
+
+## 5. Attention notification
+
+- [x] 5.1 Add setting `findUncommitted.attentionDisplay` and wire stock `showWarningMessage` for cross-machine attention (initially shipped as enum `banner`; renamed to `notification` in 5.5)
+- [x] 5.2 On cross-machine attention when display is notification mode, show dismissible warning notification with Show Details, Open Settings (focus `attentionDisplay`), and Dismiss; fingerprint the episode so timer/manual refresh does not re-spam
+- [x] 5.3 Unit tests for display-mode gating (no notification for local-only / `statusBar` mode) and dismiss/episode suppression
+- [x] 5.4 Document notification vs status-bar preference in the extension README
+- [x] 5.5 Rename setting enum/default from `banner` → `notification` in `package.json`, code, tests, and READMEs; treat legacy `banner` as `notification` if present; keep behavior (usual VS Code warning notification, not custom banner UI)

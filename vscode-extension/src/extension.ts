@@ -1,5 +1,11 @@
 import * as vscode from "vscode";
 import {
+  AttentionDisplay,
+  NOTIFICATION_ACTIONS,
+  NotificationEpisodeTracker,
+  parseAttentionDisplay,
+} from "./notification";
+import {
   missingBinaryMessage,
   outcomeFromRun,
   resolveBinary,
@@ -15,6 +21,7 @@ let generation = 0;
 let abortController: AbortController | undefined;
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
 let openDebounce: ReturnType<typeof setTimeout> | undefined;
+const notificationTracker = new NotificationEpisodeTracker();
 
 export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel("Find Uncommitted");
@@ -45,6 +52,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeWorkspaceFolders(() => scheduleCheckOnOpen()),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("findUncommitted")) {
+        if (e.affectsConfiguration("findUncommitted.attentionDisplay")) {
+          notificationTracker.reset();
+        }
         setupRefreshInterval();
         void refresh("config");
       }
@@ -162,10 +172,48 @@ async function refresh(_reason: string): Promise<boolean> {
   lastOutcomes = outcomes;
   const tier = tierFromOutcomes(outcomes);
   applyStatusBar(statusBar, tier, outcomes, hideWhenClear);
+  void maybeShowAttentionNotification(outcomes);
 
   output.clear();
   output.appendLine(formatDetails(outcomes));
   return true;
+}
+
+function attentionDisplay(): AttentionDisplay {
+  return parseAttentionDisplay(cfg().get<string>("attentionDisplay"));
+}
+
+async function maybeShowAttentionNotification(
+  outcomes: FolderOutcome[]
+): Promise<void> {
+  const decision = notificationTracker.takeShowDecision(
+    attentionDisplay(),
+    outcomes
+  );
+  if (!decision.show) {
+    return;
+  }
+  const choice = await vscode.window.showWarningMessage(
+    decision.message,
+    NOTIFICATION_ACTIONS.showDetails,
+    NOTIFICATION_ACTIONS.openSettings,
+    NOTIFICATION_ACTIONS.dismiss
+  );
+  if (choice === NOTIFICATION_ACTIONS.showDetails) {
+    showDetails();
+    return;
+  }
+  if (choice === NOTIFICATION_ACTIONS.openSettings) {
+    await vscode.commands.executeCommand(
+      "workbench.action.openSettings",
+      "findUncommitted.attentionDisplay"
+    );
+    return;
+  }
+  // Dismiss or notification closed without a button — episode already marked shown.
+  if (choice === NOTIFICATION_ACTIONS.dismiss) {
+    notificationTracker.dismiss(decision.fingerprint);
+  }
 }
 
 function showDetails(): void {

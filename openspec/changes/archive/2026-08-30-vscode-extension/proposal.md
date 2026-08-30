@@ -5,16 +5,17 @@
 ## What Changes
 
 - Add a **VS Code / Cursor extension** that shells out to the installed `find-uncommitted` binary (sticky config intact) — no reimplementation of scan/sync logic in TypeScript
-- On workspace open, folder change, and on demand: run `check` for each workspace folder that is a git work tree and surface a **quiet status-bar glyph** plus optional detail (Output / hover / command palette)
-- Two-tier signal matching Fork A: local dirty/unpushed stays quiet; **other-machine divergence** is the prominent cue
-- **Never** auto-commit, auto-push, auto-pull, or fire OS notifications by default; nudges are text-only (same posture as Attention)
+- On workspace open, folder change, and on demand: run `check` for each workspace folder that is a git work tree and surface outcomes via a **status-bar glyph** (always ambient) plus, by default, a **usual VS Code warning notification** for cross-machine attention
+- Setting `findUncommitted.attentionDisplay` (`notification` | `statusBar`, default `notification`) so users who prefer the subtle footer can opt out of the notification; notification actions include Open Settings, Show Details, and Dismiss
+- Two-tier signal matching Fork A: local dirty/unpushed stays quiet (status bar only); **other-machine divergence** is the prominent cue (notification when enabled)
+- **Never** auto-commit, auto-push, auto-pull, or fire OS notifications by default; nudges use editor-local status bar + stock VS Code notifications only (same posture as Attention)
 - Extend CLI `check` with a **machine-readable JSON** output mode so the extension does not scrape human text
 - Document binary discovery (`PATH`, setting override) and a minimal “install CLI first” path in the extension README
 
 ## Capabilities
 
 ### New Capabilities
-- `vscode-extension`: Editor thin client — status bar / commands / settings that invoke `find-uncommitted check` against workspace folders and display project × machine status plus Attention nudges without owning sync or discovery
+- `vscode-extension`: Editor thin client — status bar / optional attention notification / commands / settings that invoke `find-uncommitted check` against workspace folders and display project × machine status plus Attention nudges without owning sync or discovery
 
 ### Modified Capabilities
 - `check-path-preflight`: Add stable JSON (or equivalent structured) output for check mode so non-CLI consumers can parse project label, per-machine cells, situations, and attention outcome without scraping stdout text
