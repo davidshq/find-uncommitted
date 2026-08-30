@@ -271,6 +271,8 @@ Repository                                    Branch          Status   Changes
 Summary: 21 clean repositories, 3 repositories with uncommitted changes, 1 repositories with unpushed commits, 1 repositories behind upstream, 0 repositories with untracked upstream, 0 repositories with errors
 ```
 
+With a state repo configured, Full inventory adds a **Machine** column (local marked `*`), groups rows under project identity, and the footer is `Summary: N local repos (A need attention), M remote repos (B need attention, S stale rows), E load errors` (`--dirty-only`: `N local needing attention, M remote needing attention, E load errors`).
+
 The output shows:
 - **Attention**: Soft nudges for what to do next (never auto-executed)
 - **Repository**: Path to the git repository (truncated for readability)
@@ -278,6 +280,7 @@ The output shows:
 - **Status**: One of:
    - ✅ Clean
    - ⚠️ Dirty (working tree/index changes)
+   - 📭 Empty (`git init`, no commits yet — not an Attention local-error)
    - ⬆️ Unpushed (ahead of upstream)
    - ⬇️ Behind (behind upstream per cached tracking refs)
    - ↕️ Diverged (both ahead and behind)
@@ -320,9 +323,12 @@ Use the `--output` flag to save results to a CSV file for further analysis:
 
 The CSV file will contain the following columns:
 - **Repository**: Path to the git repository
+- **Origin**: Normalized remote origin (when set)
 - **Branch**: Current branch name
-- **Status**: Clean, Dirty, Unpushed, Behind, Diverged, UntrackedUpstream, or Error with details
+- **Status**: Clean, Dirty, Empty, Unpushed, Behind, Diverged, UntrackedUpstream, or Error with details
 - **Changes**: Comma-separated list of change types (unstaged, staged, untracked, unpushed, behind, untracked-upstream)
+
+With a state repo configured, CSV also includes **Machine**, **Local**, and **Stale** columns.
 
 This is useful for:
 - Importing into spreadsheet applications for analysis

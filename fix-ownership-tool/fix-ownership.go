@@ -18,7 +18,7 @@ func main() {
 
 	args := flag.Args()
 	if len(args) < 1 {
-		fmt.Println("Usage: go run fix-ownership.go [--debug] <directory_to_scan>")
+		fmt.Println("Usage: fix-ownership [--debug] <directory_to_scan>")
 		fmt.Println("This will find git repositories with ownership issues and fix them.")
 		os.Exit(1)
 	}
