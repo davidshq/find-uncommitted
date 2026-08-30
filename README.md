@@ -221,23 +221,24 @@ A thin client lives in [`vscode-extension/`](vscode-extension/). It shells out t
 
 Install the Go binary first, then see [vscode-extension/README.md](vscode-extension/README.md) for compile / VSIX steps and `findUncommitted.binaryPath` when the GUI app’s `PATH` is incomplete.
 
-Output starts with an **Attention** section (soft suggestions only — no git commands are run on your repos), then a **Full inventory** table. Local rows are marked with `*` on the machine column. Stale machines are annotated in the table and summarized after output.
+**BREAKING (human tree-scan output):** the default primary view is a **Project × Machine matrix** (one row per project, columns per machine). Path-centric **Full inventory** and the leading **Attention** list are opt-in via `--inventory` / `--verbose`. Situation detection is unchanged; `check` still prints nudges for one project. Visual reference: [`mockup/fork-b-correlated-view.html`](mockup/fork-b-correlated-view.html).
 
-Attention covers:
+Default matrix cells use compact tokens (`clean`, `dirty`, `↑N`, `↓N`, `stale`, …). Local machine columns are marked with `*`. Stale machines are annotated in cells and summarized after output when remotes are loaded.
+
+Situation kinds (still detected; shown as Attention under `--inventory`, or via `check`) include:
 
 - Local error, dirty, unpushed, behind upstream, and untracked upstream (behind uses cached tracking refs; no automatic `git fetch`)
 - Cross-machine branch mismatch and same-branch tip mismatch (via published short HEAD SHAs) for the same project identity
-- Other machine has dirty work (pull will not help) or unpushed commits while local is clean
+- Other machine has dirty work (pull will not help) or unpushed commits
 - Stale remote evidence when a remote attention-worthy snapshot is old
 
-The Full inventory groups rows under each project identity (origin, or parent/basename for local-only repos).
-
-With `--dirty-only`, Attention and inventory are limited to projects that produced at least one situation (clean local clones are still scanned when remotes are enabled so cross-machine cues can fire). Load-error snapshot rows remain visible.
+With `--dirty-only`, the matrix is limited to projects that produced at least one situation (clean local clones are still scanned when remotes are enabled so cross-machine cues can fire). Load-error snapshot rows remain visible.
 
 Useful flags:
 
 | Flag | Meaning |
 |------|---------|
+| `--inventory` / `--verbose` | Path-centric Full inventory + Attention (former default layout) |
 | `--state-repo` | Local clone of the private sync Git repo |
 | `--agent` | Background publish loop |
 | `--interval` | Check interval: scan + publish decision (default `2m`) |
@@ -252,7 +253,20 @@ Useful flags:
 
 ## Output Example
 
-The tool prints an Attention list first, then a full inventory table:
+Default tree scan (Project × Machine matrix):
+
+```
+Projects  (you are laptop*)
+Project                         laptop*              desktop               laptop-old
+-----------------------------------------------------------------------------------------------
+github.com/you/work-project     dirty · feature/pay  dirty · feature/pay  —
+github.com/you/notes            ↑3 · main            clean                 —
+github.com/you/api              clean                clean                 ↑2 stale
+
+Summary: 2 local repos (2 need attention), 3 remote repos (2 need attention, 1 stale rows), 0 load errors
+```
+
+Opt-in path inventory (`--inventory` or `--verbose`) restores Attention + Full inventory:
 
 ```
 Attention (suggestions only — no commands are run):
@@ -262,20 +276,14 @@ Attention (suggestions only — no commands are run):
       → pull before continuing (behind upstream by 2 commit(s))
 
 Full inventory:
-Repository                                    Branch          Status   Changes
-------------------------------------------------------------------------------------------
-../my-project                                 main            ✅ Clean    -
-../work-project                               feature/new...  ⚠️  Dirty  unstaged, untracked, behind:2
-../old-project                                develop         ⚠️  Dirty  staged
-../notes-project                              master          ⬆️ Unpushed  unpushed:1
-../stale-clone                                main            ⬇️ Behind   behind:3
-
-Summary: 21 clean repositories, 3 repositories with uncommitted changes, 1 repositories with unpushed commits, 1 repositories behind upstream, 0 repositories with untracked upstream, 0 repositories with errors
+Machine          Repository                                 Branch           Status             Changes
+--------------------------------------------------------------------------------------------------------------
+...
 ```
 
-With a state repo configured, Full inventory adds a **Machine** column (local marked `*`), groups rows under project identity, and the footer is `Summary: N local repos (A need attention), M remote repos (B need attention, S stale rows), E load errors` (`--dirty-only`: `N local needing attention, M remote needing attention, E load errors`).
+With a state repo configured, inventory adds a **Machine** column (local marked `*`), groups rows under project identity, and the footer is `Summary: N local repos (A need attention), M remote repos (B need attention, S stale rows), E load errors` (`--dirty-only`: `N local needing attention, M remote needing attention, E load errors`).
 
-The output shows:
+Inventory columns:
 - **Attention**: Soft nudges for what to do next (never auto-executed)
 - **Repository**: Path to the git repository (truncated for readability)
 - **Branch**: Current branch name (truncated if too long)
@@ -304,7 +312,7 @@ Use the `--dirty-only` flag to show only projects that need attention:
 ./find-uncommitted --dirty-only /home/username/projects
 ```
 
-This keeps Attention and inventory limited to:
+This keeps the matrix (or inventory under `--inventory`) limited to:
 
 - Git errors
 - Unstaged / staged / untracked working-tree changes
@@ -324,13 +332,12 @@ Use the `--output` flag to save results to a CSV file for further analysis:
 ```
 
 The CSV file will contain the following columns:
+- **Machine** / **Local** / **Stale**: machine id and markers (local-only scans still include the local machine)
 - **Repository**: Path to the git repository
 - **Origin**: Normalized remote origin (when set)
 - **Branch**: Current branch name
 - **Status**: Clean, Dirty, Empty, Unpushed, Behind, Diverged, UntrackedUpstream, or Error with details
 - **Changes**: Comma-separated list of change types (unstaged, staged, untracked, unpushed, behind, untracked-upstream)
-
-With a state repo configured, CSV also includes **Machine**, **Local**, and **Stale** columns.
 
 This is useful for:
 - Importing into spreadsheet applications for analysis

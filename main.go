@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/csv"
 	"errors"
 	"flag"
 	"fmt"
@@ -60,6 +59,10 @@ func main() {
 
 	flag.BoolVar(&debugMode, "debug", false, "Enable debug output")
 	flag.BoolVar(&dirtyOnly, "dirty-only", false, "Show only projects/repos needing attention (dirty, unpushed, behind, untracked upstream, cross-machine cues, or errors)")
+	var showInventory bool
+	flag.BoolVar(&showInventory, "inventory", false, "Print path-centric Full inventory (and Attention nudges) instead of the default Project × Machine matrix")
+	var verboseOut bool
+	flag.BoolVar(&verboseOut, "verbose", false, "Same as --inventory: path table + Attention (audit trail)")
 	flag.StringVar(&outputFile, "output", "", "Save results to CSV file (e.g., --output results.csv)")
 	flag.StringVar(&stateRepo, "state-repo", "", "Local path to private Git state repository for cross-machine sync")
 	flag.BoolVar(&agentMode, "agent", false, "Run as background agent publishing machine snapshots")
@@ -76,6 +79,9 @@ func main() {
 	var jsonOutput bool
 	flag.BoolVar(&jsonOutput, "json", false, "With check: print machine-readable JSON to stdout (human text remains default)")
 	flag.Parse()
+	if verboseOut {
+		showInventory = true
+	}
 
 	if uninstallSched {
 		if err := uninstallScheduler(); err != nil {
@@ -334,58 +340,38 @@ func main() {
 		return
 	}
 
-	// Aggregate UI when state repo validated or at least one snapshot loaded.
-	useAggregate := remoteOK
-	var rows []AggregateRow
-	if useAggregate {
-		rows = BuildAggregateRows(machineID, results, remote)
-		situations := DetectSituations(rows)
-		if dirtyOnly {
-			keys := ProjectKeysWithSituations(situations)
-			// Also keep load-error rows and single-repo local attention without cross-machine cues.
-			rows = FilterRowsByProjectKeys(rows, keys)
-			// Re-detect so Attention matches filtered inventory (drop orphaned stale-only noise).
-			situations = DetectSituations(rows)
-		}
+	// Always build aggregate rows so the default Project × Machine matrix (and
+	// optional path inventory) share one code path for local-only and remote.
+	rows := BuildAggregateRows(machineID, results, remote)
+	situations := DetectSituations(rows)
+	if dirtyOnly {
+		keys := ProjectKeysWithSituations(situations)
+		rows = FilterRowsByProjectKeys(rows, keys)
+		situations = DetectSituations(rows)
+	}
+
+	if showInventory {
+		// Opt-in audit trail: Attention + path table (former default).
 		DisplayAttention(situations)
 		fmt.Println("Full inventory:")
 		displayAggregateTable(rows, false) // already situation-filtered when dirty-only
-		printStaleMachineSummary(remote, staleTTL)
 	} else {
-		if dirtyOnly {
-			var filtered []RepoStatus
-			for _, r := range results {
-				if repoNeedsAttention(r) {
-					filtered = append(filtered, r)
-				}
-			}
-			results = filtered
-		}
-		situations := DetectLocalSituations(machineID, results)
-		DisplayAttention(situations)
-		fmt.Println("Full inventory:")
-		displayRepoStatusTable(results)
+		// Default morning view: matrix only (no Attention + inventory stack).
+		displayProjectMachineMatrix(rows)
+	}
+	if remoteOK {
+		printStaleMachineSummary(remote, staleTTL)
 	}
 
 	if outputFile != "" {
-		var err error
-		if useAggregate {
-			err = exportAggregateToCSV(rows, outputFile, false)
-		} else {
-			err = exportToCSV(results, outputFile)
-		}
-		if err != nil {
+		if err := exportAggregateToCSV(rows, outputFile, false); err != nil {
 			fmt.Printf("Error saving to CSV: %v\n", err)
 		} else {
 			fmt.Printf("Results saved to: %s\n", outputFile)
 		}
 	}
 
-	if useAggregate {
-		printAggregateSummary(rows, dirtyOnly)
-	} else {
-		printSummary(results)
-	}
+	printAggregateSummary(rows, dirtyOnly)
 }
 
 func printUsage() {
@@ -395,6 +381,7 @@ func printUsage() {
 	fmt.Println("Examples:")
 	fmt.Println("  find-uncommitted C:\\code")
 	fmt.Println("  find-uncommitted --dirty-only --output results.csv C:\\code")
+	fmt.Println("  find-uncommitted --inventory C:\\code")
 	fmt.Println("  find-uncommitted --state-repo D:\\state-repo C:\\code")
 	fmt.Println("  find-uncommitted --agent --state-repo D:\\state-repo --interval 2m C:\\code")
 	fmt.Println("  find-uncommitted --install-scheduler --state-repo D:\\state-repo C:\\code")
@@ -402,6 +389,8 @@ func printUsage() {
 	fmt.Println("  find-uncommitted --json check .")
 	fmt.Println("  find-uncommitted --no-remote check .")
 	fmt.Println()
+	fmt.Println("Default tree scan prints a Project x Machine matrix.")
+	fmt.Println("--inventory / --verbose  Path-centric Full inventory + Attention (former default).")
 	fmt.Println("check [--json] <path>  Pre-flight one repo (exit 0=ok, 2=attention, 1=error).")
 	fmt.Println("  --json  Machine-readable JSON on stdout (schemaVersion 1); warnings stay on stderr.")
 	fmt.Println("After --install-scheduler, sticky config enables aggregate remotes on bare scans.")
@@ -443,37 +432,6 @@ func validateStateRepo(dir string) error {
 	return nil
 }
 
-func printSummary(results []RepoStatus) {
-	cleanCount := 0
-	dirtyCount := 0
-	unpushedCount := 0
-	behindCount := 0
-	untrackedUpstreamCount := 0
-	errorCount := 0
-	for _, status := range results {
-		if status.Error != "" {
-			errorCount++
-		} else if status.IsDirty {
-			dirtyCount++
-		} else if status.HasUntrackedUpstream {
-			untrackedUpstreamCount++
-		} else if status.HasBehind {
-			behindCount++
-		} else if status.HasUnpushed {
-			unpushedCount++
-		} else {
-			cleanCount++
-		}
-	}
-
-	if dirtyOnly {
-		attention := dirtyCount + unpushedCount + behindCount + untrackedUpstreamCount
-		fmt.Printf("\nSummary: %d repositories needing attention, %d repositories with errors\n", attention, errorCount)
-	} else {
-		fmt.Printf("\nSummary: %d clean repositories, %d repositories with uncommitted changes, %d repositories with unpushed commits, %d repositories behind upstream, %d repositories with untracked upstream, %d repositories with errors\n",
-			cleanCount, dirtyCount, unpushedCount, behindCount, untrackedUpstreamCount, errorCount)
-	}
-}
 
 func findGitRepos(rootDir string, excludeRepos ...string) []string {
 	return discover.FindGitRepos(rootDir, discover.WalkOptions{
@@ -649,57 +607,4 @@ func shortHeadSHA(ctx context.Context, repoPath string) string {
 		return ""
 	}
 	return strings.TrimSpace(out)
-}
-
-func displayRepoStatusTable(results []RepoStatus) {
-	wd, _ := os.Getwd()
-
-	const pathColWidth = 50
-	const branchColWidth = 20
-	const statusColWidth = 18
-
-	fmt.Printf("%-*s %-*s %-*s %s\n", pathColWidth, "Repository", branchColWidth, "Branch", statusColWidth, "Status", "Changes")
-	fmt.Println(strings.Repeat("-", 90))
-
-	for _, status := range results {
-		snap := RepoStatusToSnapshot(status, false)
-		statusText, changesText := repoStatusText(snap, false)
-		relPath := truncate(displayPath(wd, status.Path), 42)
-		branch := truncate(status.Branch, branchColWidth-3)
-
-		fmt.Printf("%-*s %-*s %-*s %s\n", pathColWidth, relPath, branchColWidth, branch, statusColWidth, statusText, changesText)
-	}
-}
-
-func exportToCSV(results []RepoStatus, filename string) error {
-	file, err := os.Create(filename)
-	if err != nil {
-		return fmt.Errorf("failed to create CSV file: %v", err)
-	}
-	defer file.Close()
-
-	writer := csv.NewWriter(file)
-	defer writer.Flush()
-
-	header := []string{"Repository", "Origin", "Branch", "Status", "Changes"}
-	if err := writer.Write(header); err != nil {
-		return fmt.Errorf("failed to write header to CSV: %v", err)
-	}
-
-	wd, _ := os.Getwd()
-	for _, status := range results {
-		snap := RepoStatusToSnapshot(status, false)
-		statusText, changesText := repoStatusText(snap, true)
-		row := []string{
-			displayPath(wd, status.Path),
-			status.Origin,
-			status.Branch,
-			statusText,
-			changesText,
-		}
-		if err := writer.Write(row); err != nil {
-			return fmt.Errorf("failed to write row to CSV: %v", err)
-		}
-	}
-	return nil
 }
