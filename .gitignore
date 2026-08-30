@@ -1,4 +1,10 @@
-find-uncommitted.exe
-fix-ownership.exe
+# Built executables live under binaries/ (keep the directory via .gitkeep)
+/binaries/*
+!/binaries/.gitkeep
+
+# Legacy root-level binary names (in case of accidental local builds)
 /find-uncommitted
+/find-uncommitted.exe
+/fix-ownership
+/fix-ownership.exe
 *.csv

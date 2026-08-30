@@ -371,19 +371,19 @@ Use the included ownership fixer tool:
 #### Windows
 ```bash
 # Fix ownership issues for all repositories in a directory
-./fix-ownership-tool/fix-ownership.exe C:\somedirectory
+./fix-ownership.exe C:\somedirectory
 
 # With debug output
-./fix-ownership-tool/fix-ownership.exe --debug C:\somedirectory
+./fix-ownership.exe --debug C:\somedirectory
 ```
 
 #### Linux/macOS
 ```bash
 # Fix ownership issues for all repositories in a directory
-./fix-ownership-tool/fix-ownership /home/username/projects
+./fix-ownership /home/username/projects
 
 # With debug output
-./fix-ownership-tool/fix-ownership --debug /home/username/projects
+./fix-ownership --debug /home/username/projects
 ```
 
 This will automatically run the necessary `git config` commands to resolve ownership issues.
@@ -395,41 +395,35 @@ This will automatically run the necessary `git config` commands to resolve owner
 
 ## Building
 
+Compiled binaries are written to `binaries/` (gitignored). Create that directory if needed: `mkdir -p binaries`. After building, run via `./binaries/<name>` or put that directory on your `PATH` (usage examples below assume the tool is on `PATH` or invoked by name).
+
 ### Windows
 ```bash
 # Build the main executable (package ".", not main.go — the tool is multi-file)
-go build -o find-uncommitted.exe .
+go build -o binaries/find-uncommitted.exe .
 
 # Build the ownership fixer
-cd fix-ownership-tool
-go build -o fix-ownership.exe .
-cd ..
+go build -o binaries/fix-ownership.exe ./fix-ownership-tool
 ```
 
 ### Linux/macOS
 ```bash
 # Build the main executable (package ".", not main.go — the tool is multi-file)
-go build -o find-uncommitted .
+go build -o binaries/find-uncommitted .
 
 # Build the ownership fixer
-cd fix-ownership-tool
-go build -o fix-ownership .
-cd ..
+go build -o binaries/fix-ownership ./fix-ownership-tool
 ```
 
 ### Cross-platform build
 ```bash
 # Build for Windows from Linux/macOS
-GOOS=windows GOARCH=amd64 go build -o find-uncommitted.exe .
-cd fix-ownership-tool
-GOOS=windows GOARCH=amd64 go build -o fix-ownership.exe .
-cd ..
+GOOS=windows GOARCH=amd64 go build -o binaries/find-uncommitted.exe .
+GOOS=windows GOARCH=amd64 go build -o binaries/fix-ownership.exe ./fix-ownership-tool
 
 # Build for Linux from Windows
-GOOS=linux GOARCH=amd64 go build -o find-uncommitted .
-cd fix-ownership-tool
-GOOS=linux GOARCH=amd64 go build -o fix-ownership .
-cd ..
+GOOS=linux GOARCH=amd64 go build -o binaries/find-uncommitted .
+GOOS=linux GOARCH=amd64 go build -o binaries/fix-ownership ./fix-ownership-tool
 ```
 
 ## How it works
