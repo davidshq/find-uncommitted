@@ -89,8 +89,15 @@ func main() {
 	})
 
 	args := flag.Args()
+	checkMode := false
+	checkPath := ""
 	var rootDirArg string
-	if len(args) >= 1 {
+	if len(args) >= 1 && args[0] == "check" {
+		checkMode = true
+		if len(args) >= 2 {
+			checkPath = args[1]
+		}
+	} else if len(args) >= 1 {
 		rootDirArg = args[0]
 	}
 
@@ -177,8 +184,20 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if stateRepo != "" {
+	// Skip on check: pre-flight stderr should stay signal, not config lectures.
+	if stateRepo != "" && !checkMode {
 		warnStaleTTLMismatch(heartbeat, staleTTL)
+	}
+
+	if stateRepo != "" {
+		if abs, err := filepath.Abs(stateRepo); err == nil {
+			stateRepo = abs
+		}
+	}
+
+	// Path-scoped pre-flight: no scan-root required.
+	if checkMode {
+		os.Exit(runCheckMode(context.Background(), checkPath, machineID, stateRepo, skipRemote, staleTTL))
 	}
 
 	var rootDir string
@@ -191,11 +210,6 @@ func main() {
 	if rootDir == "" {
 		printUsage()
 		os.Exit(1)
-	}
-	if stateRepo != "" {
-		if abs, err := filepath.Abs(stateRepo); err == nil {
-			stateRepo = abs
-		}
 	}
 
 	if installSched {
@@ -368,6 +382,7 @@ func main() {
 
 func printUsage() {
 	fmt.Println("Usage: find-uncommitted [flags] [directory_to_scan]")
+	fmt.Println("       find-uncommitted [flags] check <path>")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  find-uncommitted C:\\code")
@@ -375,7 +390,10 @@ func printUsage() {
 	fmt.Println("  find-uncommitted --state-repo D:\\state-repo C:\\code")
 	fmt.Println("  find-uncommitted --agent --state-repo D:\\state-repo --interval 2m C:\\code")
 	fmt.Println("  find-uncommitted --install-scheduler --state-repo D:\\state-repo C:\\code")
+	fmt.Println("  find-uncommitted check ~/repos/work-project")
+	fmt.Println("  find-uncommitted --no-remote check .")
 	fmt.Println()
+	fmt.Println("check <path>  Pre-flight one repo (exit 0=ok, 2=attention, 1=error).")
 	fmt.Println("After --install-scheduler, sticky config enables aggregate remotes on bare scans.")
 	fmt.Println("Install smoke-publishes one snapshot so you can confirm the state repo works.")
 	fmt.Println("Scan root may come from config when the directory argument is omitted.")
