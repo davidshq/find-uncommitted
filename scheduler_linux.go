@@ -57,7 +57,9 @@ WantedBy=default.target
 
 	fmt.Printf("Installed and started systemd user service %q.\n", systemdService)
 	printAgentStickyConfigHint()
-	fmt.Println("Ensure lingering is enabled if the agent should run without an active login: loginctl enable-linger $USER")
+	fmt.Println("Default: agent runs while you have a login session.")
+	fmt.Println("For always-on / headless: loginctl enable-linger $USER")
+	fmt.Println("(Linger is per-user: all enabled systemd user services for this account can stay up, not only this agent.)")
 	return nil
 }
 

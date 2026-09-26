@@ -12,39 +12,36 @@ import (
 
 const schedulerTaskName = "FindUncommittedAgent"
 
-func agentLauncherPath() (string, error) {
+// legacyAgentLauncherPath is the old .cmd wrapper path; removed on install/uninstall
+// after switching the task to invoke the exe directly.
+func legacyAgentLauncherPath() (string, error) {
 	base, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(base, "find-uncommitted")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "agent-launcher.cmd"), nil
+	return filepath.Join(base, "find-uncommitted", "agent-launcher.cmd"), nil
 }
 
-// installScheduler writes a .cmd launcher (avoids schtasks arg quoting issues)
-// and registers an at-logon task that runs it.
-// Scan root, state_repo, interval, and related settings come from sticky config.
+func removeLegacyAgentLauncher() {
+	if p, err := legacyAgentLauncherPath(); err == nil {
+		_ = os.Remove(p)
+	}
+}
+
+// installScheduler registers an at-logon task that runs the exe with --agent.
+// The agent detaches its console when it owns it (see detachAgentConsoleIfOwned),
+// so no visible cmd window stays open. Scan settings come from sticky config.
 func installScheduler(exePath string) error {
-	launcher, err := agentLauncherPath()
-	if err != nil {
-		return fmt.Errorf("resolve launcher path: %w", err)
-	}
+	removeLegacyAgentLauncher()
 
-	content := "@echo off\r\n" + quoteCmdArg(exePath) + " --agent\r\n"
-	if err := os.WriteFile(launcher, []byte(content), 0o644); err != nil {
-		return fmt.Errorf("write launcher: %w", err)
-	}
-
-	cmd := exec.Command("schtasks", "/Create", "/TN", schedulerTaskName, "/SC", "ONLOGON", "/RL", "LIMITED", "/F", "/TR", quoteCmdArg(launcher))
+	tr := quoteCmdArg(exePath) + " --agent"
+	cmd := exec.Command("schtasks", "/Create", "/TN", schedulerTaskName, "/SC", "ONLOGON", "/RL", "LIMITED", "/F", "/TR", tr)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("install Windows task: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
-	fmt.Printf("Installed Windows scheduled task %q (starts agent at logon).\n", schedulerTaskName)
-	fmt.Printf("Launcher: %s\n", launcher)
+	fmt.Printf("Installed Windows scheduled task %q (starts agent at logon, no console window).\n", schedulerTaskName)
+	fmt.Printf("Task runs: %s\n", tr)
 	printAgentStickyConfigHint()
 	return nil
 }
@@ -55,9 +52,7 @@ func uninstallScheduler() error {
 	if err != nil {
 		return fmt.Errorf("uninstall Windows task: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
-	if launcher, err := agentLauncherPath(); err == nil {
-		_ = os.Remove(launcher)
-	}
+	removeLegacyAgentLauncher()
 	fmt.Printf("Removed Windows scheduled task %q.\n", schedulerTaskName)
 	return nil
 }

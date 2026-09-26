@@ -260,6 +260,9 @@ func main() {
 	}
 
 	if agentMode {
+		// On Windows, Task Scheduler allocates a console for this binary; detach
+		// when we own it so auto-run stays invisible. Interactive terminals are kept.
+		detachAgentConsoleIfOwned()
 		requireStateRepo(stateRepo, "--agent")
 		validateStateRepoOrExit(stateRepo)
 		if flagSet["state-repo"] && configPath != "" {
@@ -410,7 +413,7 @@ func printSchedulerPrereqs() {
 	fmt.Println("  - Private Git state repo cloned locally and accessible offline-tolerant")
 	fmt.Println("  - Git credentials configured for non-interactive pull/push")
 	if runtime.GOOS == "linux" {
-		fmt.Println("  - systemd user session; enable lingering for headless: loginctl enable-linger $USER")
+		fmt.Println("  - systemd user session; for headless use loginctl enable-linger $USER (per-user: all enabled user services can stay up)")
 	}
 	if runtime.GOOS == "windows" {
 		fmt.Println("  - Permission to create scheduled tasks for the current user")

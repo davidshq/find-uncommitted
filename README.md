@@ -135,38 +135,15 @@ Snapshots can include repository **paths**, **branch names**, and normalized **`
 
 Correlation survives redaction, and machines may mix settings: repositories are matched on the **hashed** origin on both sides, so a machine publishing with `--redact-paths` still lines up with one publishing plain URLs, and the project keeps its readable label wherever any machine supplies one. The exception is a repo with **no `origin` remote**, which falls back to `parent/basename` matching — redaction reduces that to the basename alone, so purely local repos correlate less precisely across a redaction boundary.
 
-### Setup
-
-1. Create a **private** empty Git repo and clone it locally (example: `D:\find-uncommitted-state`).
-2. Configure non-interactive `git pull` / `git push` credentials for that clone.
-3. Start the agent (or install the scheduler):
+### Setup / auto-run (Windows & Linux)
 
 ```bash
-# Run agent in the foreground (default check interval 2m, heartbeat 15m)
-./find-uncommitted --agent --state-repo /path/to/state-clone /path/to/scan/root
-
-# Install OS scheduler (writes sticky config, smoke-publishes a snapshot, then registers Task Scheduler / systemd)
-./find-uncommitted --install-scheduler --state-repo /path/to/state-clone /path/to/scan/root
-
-# After install, bare scans use sticky config (aggregate remotes by default)
-./find-uncommitted /path/to/scan/root
-./find-uncommitted   # uses scan_root from config when set
-
-# Local-only even with sticky config
-./find-uncommitted --no-remote /path/to/scan/root
-
-# Remove scheduler registration
-./find-uncommitted --uninstall-scheduler
+./binaries/find-uncommitted --install-scheduler --state-repo /path/to/state-clone /path/to/scan/root
+./binaries/find-uncommitted --uninstall-scheduler
+./binaries/find-uncommitted --agent --state-repo /path/to/state-clone /path/to/scan/root   # foreground
 ```
 
-Linux notes:
-- Uses a systemd **user** service that keeps the long-running agent alive
-- The unit launches `--agent` only; `scan_root`, `state_repo`, `interval`, `heartbeat`, and related settings come from sticky config
-- For headless sessions: `loginctl enable-linger $USER`
-
-Windows notes:
-- Registers an **at-logon** scheduled task that starts the agent process
-- Check / heartbeat cadence is owned by the agent loop (not a Task Scheduler repeat trigger)
+Full prerequisites, session vs always-on, linger scope, and verify steps: **[docs/auto-run-setup.md](docs/auto-run-setup.md)**. macOS scheduler is not supported yet.
 
 ### Aggregate CLI view
 
