@@ -42,4 +42,13 @@ func TestWriteSchedulerTaskXMLUsesMatchingUTF16Declaration(t *testing.T) {
 	if !bytes.Contains([]byte(text), []byte("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>")) {
 		t.Fatal("missing IgnoreNew policy")
 	}
+	if !bytes.Contains([]byte(text), []byte("<RestartOnFailure>")) {
+		t.Fatal("missing RestartOnFailure (crash recovery)")
+	}
+	if !bytes.Contains([]byte(text), []byte("<Interval>PT1M</Interval>")) {
+		t.Fatal("missing RestartOnFailure Interval PT1M")
+	}
+	if !bytes.Contains([]byte(text), []byte("<Count>999</Count>")) {
+		t.Fatal("missing RestartOnFailure Count 999")
+	}
 }

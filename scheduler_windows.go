@@ -20,7 +20,8 @@ const schedulerTaskName = "FindUncommittedAgent"
 // so no visible cmd window stays open. Scan settings come from sticky config.
 //
 // Task XML sets MultipleInstancesPolicy=IgnoreNew (so /Run is not stuck Queued
-// behind a phantom instance) and ExecutionTimeLimit=PT0S (no 72h kill).
+// behind a phantom instance), ExecutionTimeLimit=PT0S (no 72h kill), and
+// RestartOnFailure (crash recovery while the logon session is still up).
 func installScheduler(exePath string) error {
 	userID, err := windowsTaskUserID()
 	if err != nil {
@@ -37,7 +38,7 @@ func installScheduler(exePath string) error {
 	if err != nil {
 		return fmt.Errorf("install Windows task: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
-	fmt.Printf("Installed Windows scheduled task %q (starts agent at logon, no console window).\n", schedulerTaskName)
+	fmt.Printf("Installed Windows scheduled task %q (starts agent at logon, restart on failure, no console window).\n", schedulerTaskName)
 	fmt.Printf("Task runs: %s --agent\n", exePath)
 	printAgentStickyConfigHint()
 	return nil
@@ -88,22 +89,28 @@ type taskXML struct {
 		} `xml:"Principal"`
 	} `xml:"Principals"`
 	Settings struct {
-		MultipleInstancesPolicy      string `xml:"MultipleInstancesPolicy"`
-		DisallowStartIfOnBatteries   bool   `xml:"DisallowStartIfOnBatteries"`
-		StopIfGoingOnBatteries       bool   `xml:"StopIfGoingOnBatteries"`
-		AllowHardTerminate           bool   `xml:"AllowHardTerminate"`
-		StartWhenAvailable           bool   `xml:"StartWhenAvailable"`
-		AllowStartOnDemand           bool   `xml:"AllowStartOnDemand"`
-		Enabled                      bool   `xml:"Enabled"`
-		Hidden                       bool   `xml:"Hidden"`
-		RunOnlyIfIdle                bool   `xml:"RunOnlyIfIdle"`
-		WakeToRun                    bool   `xml:"WakeToRun"`
-		ExecutionTimeLimit           string `xml:"ExecutionTimeLimit"`
-		Priority                     int    `xml:"Priority"`
-		IdleSettings                 struct {
+		MultipleInstancesPolicy    string `xml:"MultipleInstancesPolicy"`
+		DisallowStartIfOnBatteries bool   `xml:"DisallowStartIfOnBatteries"`
+		StopIfGoingOnBatteries     bool   `xml:"StopIfGoingOnBatteries"`
+		AllowHardTerminate         bool   `xml:"AllowHardTerminate"`
+		StartWhenAvailable         bool   `xml:"StartWhenAvailable"`
+		AllowStartOnDemand         bool   `xml:"AllowStartOnDemand"`
+		Enabled                    bool   `xml:"Enabled"`
+		Hidden                     bool   `xml:"Hidden"`
+		RunOnlyIfIdle              bool   `xml:"RunOnlyIfIdle"`
+		WakeToRun                  bool   `xml:"WakeToRun"`
+		ExecutionTimeLimit         string `xml:"ExecutionTimeLimit"`
+		Priority                   int    `xml:"Priority"`
+		IdleSettings               struct {
 			StopOnIdleEnd bool `xml:"StopOnIdleEnd"`
 			RestartOnIdle bool `xml:"RestartOnIdle"`
 		} `xml:"IdleSettings"`
+		// RestartOnFailure mirrors systemd Restart=on-failure for the agent process
+		// while the logon session is still up (not a logged-out always-on mode).
+		RestartOnFailure struct {
+			Interval string `xml:"Interval"`
+			Count    int    `xml:"Count"`
+		} `xml:"RestartOnFailure"`
 	} `xml:"Settings"`
 	Actions struct {
 		Context string `xml:"Context,attr"`
@@ -139,6 +146,9 @@ func writeSchedulerTaskXML(exePath, userID string) (string, error) {
 	t.Settings.Priority = 7
 	t.Settings.IdleSettings.StopOnIdleEnd = false
 	t.Settings.IdleSettings.RestartOnIdle = false
+	// Task Scheduler minimum restart interval is 1 minute; Count max is 999.
+	t.Settings.RestartOnFailure.Interval = "PT1M"
+	t.Settings.RestartOnFailure.Count = 999
 	t.Actions.Context = "Author"
 	t.Actions.Exec.Command = exePath
 	t.Actions.Exec.Arguments = "--agent"

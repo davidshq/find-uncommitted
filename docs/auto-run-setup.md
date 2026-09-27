@@ -150,7 +150,7 @@ Install creates:
 - Task name: `FindUncommittedAgent`
 - Trigger: **at logon** for the current user (`LogonTrigger`, limited rights)
 - Action: `<absolute-path-to-exe> --agent` (no `.cmd` / VBS wrapper)
-- Settings: `MultipleInstancesPolicy=IgnoreNew` (so `schtasks /Run` is not stuck **Queued**), `ExecutionTimeLimit` disabled (agent may run indefinitely), task marked hidden
+- Settings: `MultipleInstancesPolicy=IgnoreNew` (so `schtasks /Run` is not stuck **Queued**), `ExecutionTimeLimit` disabled (agent may run indefinitely), task marked hidden, `RestartOnFailure` every `1m` up to `999` attempts (crash recovery while the logon session is still up)
 
 At agent start on Windows, if this process is the only one on the console (typical for Task Scheduler), the agent **detaches that console** so no cmd window stays open. Interactive `--agent` in an existing terminal keeps logging visible. Git subprocesses and cancel helpers are created with no console window.
 
@@ -158,7 +158,7 @@ Cadence (check interval / heartbeat) is owned by the agent loop inside the proce
 
 **Session-only (only supported mode):** the task runs in your interactive logon session. It does **not** run at the login screen, after full logout, or when the only access is SMB/SFTP with no Windows logon for this user. There is no linger equivalent in the current installer. For an always-on Windows box you hit mainly over the network, leave a user session logged in (or run `--agent` under a host mechanism you trust with state-repo credentials).
 
-Unlike Linux systemd, the Windows task does **not** auto-restart the process on crash; log out/in (or start the task again) if the agent exits.
+If the agent process exits with a failure while you are still logged in, Task Scheduler restarts it (same idea as Linux `Restart=on-failure`). Clean exit (code 0) does not restart. Re-run `--install-scheduler` after upgrading so older tasks pick up recovery settings.
 
 After upgrading the binary or moving it, re-run `--install-scheduler` so the task path is rewritten.
 
