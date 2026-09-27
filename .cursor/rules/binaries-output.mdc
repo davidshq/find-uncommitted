@@ -1,0 +1,25 @@
+---
+description: Built executables must go under binaries/, never the repo root
+alwaysApply: true
+---
+
+# Binary output location
+
+All compiled binaries for this project belong in `binaries/`, not the repository root.
+
+When building (locally or instructing the user):
+
+```bash
+# Main tool
+go build -o binaries/find-uncommitted .
+# Windows target / on Windows:
+go build -o binaries/find-uncommitted.exe .
+
+# Ownership helper (from repo root)
+go build -o binaries/fix-ownership ./fix-ownership-tool
+go build -o binaries/fix-ownership.exe ./fix-ownership-tool
+```
+
+- Do **not** write `find-uncommitted`, `find-uncommitted.exe`, `fix-ownership`, or `fix-ownership.exe` at the repo root.
+- Create `binaries/` if it is missing before building.
+- Prefer documenting and running via `./binaries/<name>`.

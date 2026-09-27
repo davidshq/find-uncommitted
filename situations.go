@@ -1,0 +1,508 @@
+package main
+
+import (
+	"fmt"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// headSHAsEqual reports whether two published short SHAs refer to the same tip.
+// Machines may abbreviate differently (historical bare --short / core.abbrev vs
+// fixed --short=12), so equality is shared-prefix: either string is a prefix of
+// the other after normalizing case/whitespace.
+func headSHAsEqual(a, b string) bool {
+	a = strings.ToLower(strings.TrimSpace(a))
+	b = strings.ToLower(strings.TrimSpace(b))
+	if a == "" || b == "" {
+		return false
+	}
+	return a == b || strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
+}
+
+// SituationKind identifies a cross-machine or local awareness cue.
+// Nudges suggest verbs only; the tool never runs git mutations on user repos.
+type SituationKind string
+
+const (
+	SituationLocalError             SituationKind = "local_error"
+	SituationLocalDirty             SituationKind = "local_dirty"
+	SituationLocalUnpushed          SituationKind = "local_unpushed"
+	SituationLocalBehind            SituationKind = "local_behind"
+	SituationLocalUntrackedUpstream SituationKind = "local_untracked_upstream"
+	SituationBranchMismatch         SituationKind = "branch_mismatch"
+	SituationTipMismatch            SituationKind = "tip_mismatch"
+	SituationOtherMachineWork       SituationKind = "other_machine_work"
+	SituationStaleEvidence          SituationKind = "stale_evidence"
+)
+
+// situationPriority orders Attention output (lower = higher priority).
+func situationPriority(k SituationKind) int {
+	switch k {
+	case SituationLocalError:
+		return 1
+	case SituationLocalDirty:
+		return 2
+	case SituationLocalUnpushed:
+		return 3
+	case SituationLocalBehind:
+		return 4
+	case SituationLocalUntrackedUpstream:
+		return 5
+	case SituationBranchMismatch:
+		return 6
+	case SituationTipMismatch:
+		return 7
+	case SituationOtherMachineWork:
+		return 8
+	case SituationStaleEvidence:
+		return 9
+	default:
+		return 99
+	}
+}
+
+// Situation is one actionable awareness cue for a correlated project.
+type Situation struct {
+	Kind         SituationKind
+	ProjectKey   string
+	ProjectLabel string
+	Nudge        string
+	Machines     []string
+	Stale        bool // true when remote evidence behind the nudge may be stale
+}
+
+// ProjectGroup collects aggregate rows that share a correlation key.
+type ProjectGroup struct {
+	Key   string
+	Label string
+	Rows  []AggregateRow
+}
+
+// GroupRowsByProject clusters aggregate rows by origin/basename identity.
+func GroupRowsByProject(rows []AggregateRow) []ProjectGroup {
+	index := map[string]int{}
+	var groups []ProjectGroup
+	for _, row := range rows {
+		if row.LoadError != "" {
+			continue
+		}
+		key := repoCorrelationKey(row.Repo)
+		label := projectLabel(row.Repo)
+		if i, ok := index[key]; ok {
+			groups[i].Rows = append(groups[i].Rows, row)
+			// A group can mix machines that redact with machines that do not;
+			// show the most legible label any of them contributed.
+			if projectLabelRank(label) < projectLabelRank(groups[i].Label) {
+				groups[i].Label = label
+			}
+			continue
+		}
+		index[key] = len(groups)
+		groups = append(groups, ProjectGroup{
+			Key:   key,
+			Label: label,
+			Rows:  []AggregateRow{row},
+		})
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		return groups[i].Label < groups[j].Label
+	})
+	return groups
+}
+
+// projectLabelRank orders label legibility (lower is better): a plain origin or
+// path beats a basename salvaged from a redacted row, which beats a bare hash.
+func projectLabelRank(label string) int {
+	switch {
+	case strings.HasPrefix(label, redactedOriginPrefix):
+		return 2
+	case strings.HasSuffix(label, " (redacted origin)"):
+		return 1
+	default:
+		return 0
+	}
+}
+
+func projectLabel(repo RepoSnapshot) string {
+	if o := strings.TrimSpace(repo.Origin); o != "" {
+		if strings.HasPrefix(o, redactedOriginPrefix) {
+			base := filepath.Base(repo.Path)
+			if base != "" && base != "." && base != "…" {
+				return base + " (redacted origin)"
+			}
+			return o
+		}
+		return o
+	}
+	if id := pathBasenameIdentity(repo.Path); id != "" {
+		return id
+	}
+	return repo.Path
+}
+
+// DetectSituations builds soft-advice cues from project-grouped aggregate rows.
+// Advice is text-only; callers must not execute suggested git commands.
+func DetectSituations(rows []AggregateRow) []Situation {
+	groups := GroupRowsByProject(rows)
+	var out []Situation
+	for _, g := range groups {
+		out = append(out, detectGroupSituations(g)...)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		pi, pj := situationPriority(out[i].Kind), situationPriority(out[j].Kind)
+		if pi != pj {
+			return pi < pj
+		}
+		if out[i].ProjectLabel != out[j].ProjectLabel {
+			return out[i].ProjectLabel < out[j].ProjectLabel
+		}
+		return out[i].Kind < out[j].Kind
+	})
+	return out
+}
+
+// localTreeSuffix disambiguates one working tree when this machine holds several
+// for the same project — linked worktrees and submodules share their origin, so
+// they correlate into a single group.
+func localTreeSuffix(locals []AggregateRow, row AggregateRow) string {
+	if len(locals) < 2 || row.Repo.Path == "" {
+		return ""
+	}
+	return fmt.Sprintf(" [%s]", row.Repo.Path)
+}
+
+func detectGroupSituations(g ProjectGroup) []Situation {
+	// A project can have more than one local working tree (linked worktrees,
+	// submodules). Keeping only the last one silently dropped the others'
+	// cues — a dirty worktree beside a clean clone reported "nothing needing
+	// attention" while the inventory showed it as dirty.
+	var locals []AggregateRow
+	var remote []AggregateRow
+	for _, row := range g.Rows {
+		if row.Local {
+			locals = append(locals, row)
+		} else {
+			remote = append(remote, row)
+		}
+	}
+
+	// Cross-machine comparisons use one representative tree. Rows arrive sorted
+	// by path, so this is deterministic rather than iteration-order dependent.
+	var local *AggregateRow
+	if len(locals) > 0 {
+		local = &locals[0]
+	}
+
+	var situations []Situation
+	anyRemoteStale := false
+	for _, r := range remote {
+		if r.Stale {
+			anyRemoteStale = true
+			break
+		}
+	}
+
+	// Local cues are per working tree, so every local row gets its own.
+	for _, l := range locals {
+		repo := l.Repo
+		where := localTreeSuffix(locals, l)
+		if repo.Error != "" && !repo.IsEmpty {
+			situations = append(situations, Situation{
+				Kind:         SituationLocalError,
+				ProjectKey:   g.Key,
+				ProjectLabel: g.Label,
+				Nudge:        "fix local git error: " + repo.Error + where,
+				Machines:     []string{l.Machine},
+			})
+		}
+		if repo.Error == "" && repo.IsDirty {
+			situations = append(situations, Situation{
+				Kind:         SituationLocalDirty,
+				ProjectKey:   g.Key,
+				ProjectLabel: g.Label,
+				Nudge:        "commit or stash local changes before switching machines" + where,
+				Machines:     []string{l.Machine},
+			})
+		}
+		if repo.Error == "" && repo.HasUnpushed {
+			nudge := "push local commits so other machines can pull"
+			if repo.AheadCount > 0 {
+				nudge = fmt.Sprintf("push %d local commit(s) so other machines can pull", repo.AheadCount)
+			}
+			situations = append(situations, Situation{
+				Kind:         SituationLocalUnpushed,
+				ProjectKey:   g.Key,
+				ProjectLabel: g.Label,
+				Nudge:        nudge + where,
+				Machines:     []string{l.Machine},
+			})
+		}
+		if repo.Error == "" && repo.HasBehind {
+			nudge := "pull before continuing (local branch is behind upstream)"
+			if repo.BehindCount > 0 {
+				nudge = fmt.Sprintf("pull before continuing (behind upstream by %d commit(s))", repo.BehindCount)
+			}
+			situations = append(situations, Situation{
+				Kind:         SituationLocalBehind,
+				ProjectKey:   g.Key,
+				ProjectLabel: g.Label,
+				Nudge:        nudge + where,
+				Machines:     []string{l.Machine},
+			})
+		}
+		if repo.Error == "" && repo.HasUntrackedUpstream {
+			situations = append(situations, Situation{
+				Kind:         SituationLocalUntrackedUpstream,
+				ProjectKey:   g.Key,
+				ProjectLabel: g.Label,
+				Nudge:        "set upstream tracking (or push -u) so ahead/behind status is meaningful" + where,
+				Machines:     []string{l.Machine},
+			})
+		}
+	}
+
+	branchMismatch := false
+	if local != nil && len(remote) > 0 {
+		localBranch := strings.TrimSpace(local.Repo.Branch)
+		var mismatchParts []string
+		var mismatchStale bool
+		for _, r := range remote {
+			other := strings.TrimSpace(r.Repo.Branch)
+			if localBranch == "" || other == "" {
+				continue
+			}
+			if other != localBranch {
+				mismatchParts = append(mismatchParts, fmt.Sprintf("%s on %s", other, formatMachineLabel(r)))
+				if r.Stale {
+					mismatchStale = true
+				}
+			}
+		}
+		if len(mismatchParts) > 0 {
+			branchMismatch = true
+			nudge := fmt.Sprintf("branch differs from local %q — other machine(s): %s", localBranch, strings.Join(mismatchParts, ", "))
+			if mismatchStale {
+				nudge += " (some snapshots stale — verify before switching)"
+			}
+			situations = append(situations, Situation{
+				Kind:         SituationBranchMismatch,
+				ProjectKey:   g.Key,
+				ProjectLabel: g.Label,
+				Nudge:        nudge,
+				Machines:     append([]string{local.Machine}, machineNames(remote)...),
+				Stale:        mismatchStale,
+			})
+		}
+	}
+
+	// Same branch, different HEAD tip (uses published short SHAs; no object fetch).
+	// Equality is shared-prefix so older 7-char and newer 12-char abbrevs of the
+	// same tip do not false-alarm as tip_mismatch across machines.
+	if local != nil && len(remote) > 0 && !branchMismatch {
+		localSHA := strings.TrimSpace(local.Repo.HeadSHA)
+		localBranch := strings.TrimSpace(local.Repo.Branch)
+		if localSHA != "" && localBranch != "" && !strings.HasPrefix(localBranch, "detached HEAD") {
+			var tipParts []string
+			var tipStale bool
+			for _, r := range remote {
+				otherBranch := strings.TrimSpace(r.Repo.Branch)
+				otherSHA := strings.TrimSpace(r.Repo.HeadSHA)
+				if otherBranch != localBranch || otherSHA == "" {
+					continue
+				}
+				if !headSHAsEqual(localSHA, otherSHA) {
+					tipParts = append(tipParts, fmt.Sprintf("%s on %s", otherSHA, formatMachineLabel(r)))
+					if r.Stale {
+						tipStale = true
+					}
+				}
+			}
+			if len(tipParts) > 0 {
+				nudge := fmt.Sprintf("same branch %q but different tip (local %s vs %s) — pull/push or inspect divergence",
+					localBranch, localSHA, strings.Join(tipParts, ", "))
+				if tipStale {
+					nudge += " (some snapshots stale)"
+				}
+				situations = append(situations, Situation{
+					Kind:         SituationTipMismatch,
+					ProjectKey:   g.Key,
+					ProjectLabel: g.Label,
+					Nudge:        nudge,
+					Machines:     append([]string{local.Machine}, machineNames(remote)...),
+					Stale:        tipStale,
+				})
+			}
+		}
+	}
+
+	// Remote work is reported whatever the local state. Gating this on a clean
+	// local copy suppressed the cue in the one case that matters most: both
+	// machines dirty in the same project, which is the collision this tool exists
+	// to prevent. A dirty local repo only earned "stash your changes" before.
+	if local != nil {
+		var dirtyMachines []string
+		var unpushedMachines []string
+		var workStale bool
+		for _, r := range remote {
+			if r.Repo.Error != "" {
+				continue
+			}
+			if r.Repo.IsDirty {
+				dirtyMachines = append(dirtyMachines, formatMachineLabel(r))
+				if r.Stale {
+					workStale = true
+				}
+			} else if r.Repo.HasUnpushed {
+				unpushedMachines = append(unpushedMachines, formatMachineLabel(r))
+				if r.Stale {
+					workStale = true
+				}
+			}
+		}
+		var parts []string
+		if len(dirtyMachines) > 0 {
+			parts = append(parts, fmt.Sprintf("uncommitted work on %s (pull will not get those changes — commit/push there or continue on that machine)",
+				strings.Join(dirtyMachines, ", ")))
+		}
+		if len(unpushedMachines) > 0 {
+			parts = append(parts, fmt.Sprintf("unpushed commits on %s — pull after they push, or continue there",
+				strings.Join(unpushedMachines, ", ")))
+		}
+		if len(parts) > 0 {
+			anyLocalDirty := false
+			for _, l := range locals {
+				if l.Repo.Error == "" && l.Repo.IsDirty {
+					anyLocalDirty = true
+					break
+				}
+			}
+			nudge := "other machine has " + strings.Join(parts, "; ")
+			if anyLocalDirty && len(dirtyMachines) > 0 {
+				nudge = fmt.Sprintf("uncommitted work on BOTH sides — here and on %s; resolve one side before editing both",
+					strings.Join(dirtyMachines, ", "))
+				if len(unpushedMachines) > 0 {
+					nudge += fmt.Sprintf("; also unpushed commits on %s", strings.Join(unpushedMachines, ", "))
+				}
+			}
+			if workStale {
+				nudge += " (snapshot may be stale)"
+			}
+			machines := append([]string{}, dirtyMachines...)
+			machines = append(machines, unpushedMachines...)
+			situations = append(situations, Situation{
+				Kind:         SituationOtherMachineWork,
+				ProjectKey:   g.Key,
+				ProjectLabel: g.Label,
+				Nudge:        nudge,
+				Machines:     machines,
+				Stale:        workStale,
+			})
+		}
+	}
+
+	// Standalone stale cue only when a remote row itself needs attention and no
+	// stronger situation already carried a stale qualifier (avoids noisy clean lists).
+	if anyRemoteStale {
+		alreadyQualified := false
+		for _, s := range situations {
+			if s.Stale {
+				alreadyQualified = true
+				break
+			}
+		}
+		if !alreadyQualified {
+			var staleMachines []string
+			for _, r := range remote {
+				if r.Stale && snapshotNeedsAttention(r.Repo) {
+					staleMachines = append(staleMachines, formatMachineLabel(r))
+				}
+			}
+			if len(staleMachines) > 0 {
+				situations = append(situations, Situation{
+					Kind:         SituationStaleEvidence,
+					ProjectKey:   g.Key,
+					ProjectLabel: g.Label,
+					Nudge:        fmt.Sprintf("remote snapshot(s) stale for: %s — treat other-machine advice cautiously", strings.Join(staleMachines, ", ")),
+					Machines:     staleMachines,
+					Stale:        true,
+				})
+			}
+		}
+	}
+
+	return situations
+}
+
+func formatMachineLabel(row AggregateRow) string {
+	name := row.Machine
+	if row.Stale {
+		return name + " (stale)"
+	}
+	return name
+}
+
+func machineNames(rows []AggregateRow) []string {
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.Machine)
+	}
+	return out
+}
+
+// ProjectKeysWithSituations returns correlation keys that produced at least one situation.
+func ProjectKeysWithSituations(situations []Situation) map[string]bool {
+	keys := make(map[string]bool, len(situations))
+	for _, s := range situations {
+		keys[s.ProjectKey] = true
+	}
+	return keys
+}
+
+// FilterRowsByProjectKeys keeps aggregate rows whose correlation key is in keys.
+// Load-error rows are always retained. When keys is empty, only load-error rows remain.
+func FilterRowsByProjectKeys(rows []AggregateRow, keys map[string]bool) []AggregateRow {
+	var out []AggregateRow
+	for _, row := range rows {
+		if row.LoadError != "" {
+			out = append(out, row)
+			continue
+		}
+		if len(keys) > 0 && keys[repoCorrelationKey(row.Repo)] {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// DisplayAttention prints the primary Attention / nudge list.
+// Suggestions are advisory only and must never trigger git writes on user repos.
+func DisplayAttention(situations []Situation) {
+	fmt.Println("Attention (suggestions only — no commands are run):")
+	if len(situations) == 0 {
+		fmt.Println("  (nothing needing attention)")
+		fmt.Println()
+		return
+	}
+	for _, s := range situations {
+		fmt.Printf("  • %s\n", s.ProjectLabel)
+		fmt.Printf("      → %s\n", s.Nudge)
+	}
+	fmt.Println()
+}
+
+// DetectLocalSituations builds Attention cues from a local-only scan (no state bus).
+func DetectLocalSituations(machineID string, results []RepoSnapshot) []Situation {
+	if machineID == "" {
+		machineID = "local"
+	}
+	var rows []AggregateRow
+	for _, status := range results {
+		rows = append(rows, AggregateRow{
+			Machine: machineID,
+			Local:   true,
+			Repo:    status,
+		})
+	}
+	return DetectSituations(rows)
+}

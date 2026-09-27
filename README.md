@@ -6,13 +6,18 @@ A Go application that scans your hard drive for git repositories and reports on 
 
 - 🔍 **Recursive scanning**: Automatically finds all git repositories in the specified directory
 - ⚡ **Concurrent processing**: Uses goroutines to check repository status in parallel
-- 📊 **Detailed reporting**: Shows branch name, unstaged changes, staged changes, untracked files, and unpushed commits
+- 📊 **Detailed reporting**: Shows branch name, unstaged/staged/untracked changes, unpushed commits, and behind-upstream status
+- 💡 **Attention nudges**: Soft suggestions (commit, push, pull, branch mismatch, other-machine work) — never auto-runs git on your repos
+- ✈️ **`check <path>` pre-flight**: Compact project × machine status for one repo (scriptable exit codes + `--json`)
+- 🩺 **`doctor` / `--print-config`**: Operability report and resolved settings with sources
+- 🧩 **Editor extension**: VS Code / Cursor thin client — see [vscode-extension/](vscode-extension/)
 - 🚫 **Smart filtering**: Skips system directories and common build folders to improve performance
 - 📈 **Summary statistics**: Provides a count of clean vs. dirty repositories
-- 🎯 **Dirty-only mode**: Option to show only repositories with uncommitted changes
+- 🎯 **Dirty-only mode**: Option to show only projects needing attention (including cross-machine situations)
 - 📄 **CSV export**: Save results to a CSV file for further analysis
 - 🛠️ **Ownership issue detection**: Identifies and provides guidance for Git ownership problems
 - 🔧 **Debug mode**: Optional debug output for troubleshooting
+- 🔄 **Cross-machine sync**: Background agent publishes per-machine snapshots to a private Git state repo and the CLI shows aggregate (with stale labeling)
 
 ## Usage
 
@@ -64,52 +69,252 @@ A Go application that scans your hard drive for git repositories and reports on 
 ./find-uncommitted --dirty-only --output dirty-repos.csv /home/username/projects
 ```
 
+## Cross-machine state sync
+
+Use a **private** Git repository as a sync bus so each machine publishes its latest known uncommitted state and any machine can display an aggregate view.
+
+### How it works
+
+- Each machine writes only its own file: `machines/<sanitized>-<hash>.json` (short hash of the raw machine id avoids collisions after path-unsafe characters are sanitized)
+- Each repo entry includes a normalized **`origin`** URL (when configured) so the same project can be correlated across machines even when local paths differ; SSH and HTTPS remotes canonicalize to the same key
+- Aggregate rows sort by that identity (origin, or path basename for local-only repos) so copies of one project land together
+- Background `agent` mode pulls, scans, writes, and push/rebases on a check interval (default **2m**)
+- Each agent tick has a **2m deadline**; every individual git subprocess has a **30s** deadline (`CommandContext`). Hung credential prompts or stuck git abort the tick with a warning instead of stalling forever while the process looks healthy. On Windows, cancel kills the git **process tree** without flashing a console, and git itself is started with no window. Large scan roots that cannot finish within `2m` can raise `--tick-timeout` (for example `15m`) without changing the default
+- Agent git invocations set `GIT_TERMINAL_PROMPT=0` so interactive credential waits fail fast
+- Interactive scans load remotes when a state repo is resolved from `--state-repo`, `FIND_UNCOMMITTED_STATE_REPO`, or sticky TOML config (unless `--no-remote`)
+- Agent and interactive CLI coordinate on the state clone with a flock on `.find-uncommitted-sync.lock`; if the agent is publishing, the CLI skips `git pull` and uses on-disk snapshots
+- On `install-scheduler`, a stable `machine_id` is generated and saved when none is configured (hostname + random suffix) so cloned VMs do not silently share an id
+- Snapshots older than `--stale-ttl` (default **30m**) are labeled **stale**
+- Unchanged status does not create commits every tick; a **heartbeat** commit (default **15m**, sticky `heartbeat`) refreshes `updated_at` so remote views stay fresh without chatty history. Content changes still publish on the check that detects them. A failed commit after writing the snapshot restores the previous on-disk file so `updated_at` never claims a publish that did not land; a dirty machine snapshot still forces a commit even when the heartbeat would skip (orphan recovery).
+- Agent exits cleanly on Ctrl+C / SIGTERM (mid-tick git work is cancelled)
+
+### Sticky config (recommended)
+
+After `install-scheduler`, settings are written to a user-scoped TOML file so bare scans include remotes without retyping `--state-repo`:
+
+| Platform | Path |
+|----------|------|
+| Linux/macOS | `$XDG_CONFIG_HOME/find-uncommitted/config.toml` (usually `~/.config/find-uncommitted/config.toml`) |
+| Windows | `%AppData%\find-uncommitted\config.toml` |
+
+Example:
+
+```toml
+state_repo = "/path/to/uncommitted-state"
+scan_root = "/path/to/repos"
+machine_id = "my-laptop-a1b2"  # auto-generated on install-scheduler if unset
+interval = "2m"       # how often to check (scan + publish decision)
+heartbeat = "15m"     # liveness commit when status is unchanged
+stale_ttl = "30m"     # mark remote snapshots stale after this (keep ≈ 2× heartbeat)
+redact_paths = false
+max_workers = 8       # parallel repo checks (default 8)
+```
+
+To restore the older aggressive profile (frequent checks + chatty heartbeats):
+
+```toml
+interval = "30s"
+heartbeat = "2m"
+stale_ttl = "5m"
+```
+
+**Precedence:** CLI flags > environment variables > config file > built-in defaults.
+
+Useful env vars: `FIND_UNCOMMITTED_STATE_REPO`, `FIND_UNCOMMITTED_SCAN_ROOT`, `FIND_UNCOMMITTED_MACHINE_ID`, `FIND_UNCOMMITTED_INTERVAL`, `FIND_UNCOMMITTED_HEARTBEAT`, `FIND_UNCOMMITTED_STALE_TTL`, `FIND_UNCOMMITTED_REDACT_PATHS`, `FIND_UNCOMMITTED_MAX_WORKERS`.
+
+Inspect what will actually be used (value + source):
+
+```bash
+./binaries/find-uncommitted --print-config
+```
+
+Operability check (config path, agent/sync locks, last publish, scheduler health, state-repo validity):
+
+```bash
+./binaries/find-uncommitted doctor   # exit 0 = no FAIL lines; exit 1 = at least one FAIL
+```
+
+When config supplies `state_repo`, the CLI prints a short stderr notice and aggregates remotes. Use `--no-remote` for a local-only scan. If the configured state clone path is missing or invalid, the scan **exits with an error** (so a bad sticky config cannot silently look like a local-only machine). If the clone is valid but offline/`git pull` fails, the tool warns and still shows local results plus any on-disk snapshots. Corrupt individual snapshot JSON files are skipped with a stderr warning; valid siblings still appear in the aggregate.
+
+`install-scheduler` runs a one-shot **smoke publish** before registering the OS scheduler, then prints the snapshot path so you can confirm a file landed in the state repo.
+
+**Migration:** If you installed the scheduler before sticky config existed, re-run `install-scheduler` once (or create the TOML file manually). Until then, interactive scans stay local-only unless you pass `--state-repo`.
+
+If your sticky config still has `stale_ttl = "5m"` from an older install, bump it to `30m`, or set an explicit `heartbeat` so `stale_ttl` is at least ~2× it (e.g. `heartbeat = "2m"` with `stale_ttl = "5m"`). Newer defaults use a `15m` heartbeat when unset; leaving `stale_ttl` at `5m` makes healthy machines look stale for most of each heartbeat window.
+
+### Privacy warning
+
+Snapshots can include repository **paths**, **branch names**, and normalized **`origin`** URLs (org/repo identity). Keep the state repository private. Use `--redact-paths` if you want basenames only for paths and a stable hash instead of the origin URL. Agent logs intentionally avoid dumping full snapshot payloads.
+
+Correlation survives redaction, and machines may mix settings: repositories are matched on the **hashed** origin on both sides, so a machine publishing with `--redact-paths` still lines up with one publishing plain URLs, and the project keeps its readable label wherever any machine supplies one. The exception is a repo with **no `origin` remote**, which falls back to `parent/basename` matching — redaction reduces that to the basename alone, so purely local repos correlate less precisely across a redaction boundary.
+
+### Setup / auto-run (Windows & Linux)
+
+```bash
+./binaries/find-uncommitted --state-repo /path/to/state-clone install-scheduler /path/to/scan/root
+./binaries/find-uncommitted uninstall-scheduler
+./binaries/find-uncommitted --state-repo /path/to/state-clone agent /path/to/scan/root   # foreground
+```
+
+After upgrading past the soft-command CLI, re-run `install-scheduler` on each machine so the OS unit/task invokes `agent` (old installs used `--agent`, which is no longer accepted).
+
+Full prerequisites, session vs always-on, linger scope, and verify steps: **[docs/auto-run-setup.md](docs/auto-run-setup.md)**. macOS scheduler is not supported yet.
+
+### Aggregate CLI view
+
+```bash
+# Explicit state repo (also works without sticky config)
+./find-uncommitted --state-repo /path/to/state-clone /path/to/scan/root
+./find-uncommitted --state-repo /path/to/state-clone --stale-ttl 30m --machine-id my-laptop /path/to/scan/root
+
+# With sticky config already installed
+./find-uncommitted /path/to/scan/root
+```
+
+### Check one repo (pre-flight)
+
+Path-scoped pre-flight for the repo you are about to work in — same correlation and Attention cues as the aggregate view, without scanning a whole tree:
+
+```bash
+./find-uncommitted check ~/repos/work-project
+./find-uncommitted check .                  # from inside a repo (or subdirectory)
+./find-uncommitted --no-remote check .      # local status only
+./find-uncommitted --json check .           # machine-readable JSON (editors / scripts)
+./find-uncommitted check --json .           # same; --json may follow check
+```
+
+Example:
+
+```
+github.com/you/work-project
+  laptop*: Dirty on feature/auth (unstaged)
+  desktop: Clean on main
+→ commit or stash local changes before switching machines
+→ other machine desktop has uncommitted work
+```
+
+Local machine is listed first (`*`); each machine is on its own line.
+
+With `--json`, stdout is a single JSON object (`schemaVersion: 1`) with `ok`, `attention`, `project`, `machines[]` (including `local` / `stale` and snapshot status fields), and `situations[]` (`kind`, `nudge`, `machines`, `stale`). Non-fatal warnings stay on stderr so stdout remains parseable. On hard errors, exit is `1` and JSON (if emitted) has `ok: false` with an `error` field — never a false “clear” success. Human text remains the default without `--json`.
+
+Exit codes (check mode only):
+
+| Code | Meaning |
+|------|---------|
+| `0` | Nothing needing attention |
+| `2` | One or more Attention situations |
+| `1` | Usage error, not a git work tree, or invalid state repo when remotes are required |
+
+Shell `cd` hooks (bash/zsh + PowerShell) live in [`examples/cd-hook/`](examples/cd-hook/) with setup notes in [`docs/cd-hook.md`](docs/cd-hook.md). They print only on Attention (exit `2`). Editor clients should prefer `find-uncommitted --json check <path>`.
+
+### Editor extension (VS Code / Cursor)
+
+A thin client lives in [`vscode-extension/`](vscode-extension/). It shells out to `find-uncommitted --json check` for each workspace folder — same Attention nudges as the CLI, no git mutations, no reimplemented sync. Cross-machine attention defaults to a usual VS Code warning notification plus status bar; set `findUncommitted.attentionDisplay` to `statusBar` for the subtle footer only.
+
+Install the Go binary first, then see [vscode-extension/README.md](vscode-extension/README.md) for compile / VSIX steps and `findUncommitted.binaryPath` when the GUI app’s `PATH` is incomplete.
+
+**BREAKING (human tree-scan output):** the default primary view is a **Project × Machine matrix** (one row per project, columns per machine). Path-centric **Full inventory** and the leading **Attention** list are opt-in via `--inventory` / `--verbose`. Situation detection is unchanged; `check` still prints nudges for one project. Visual reference: [`mockup/fork-b-correlated-view.html`](mockup/fork-b-correlated-view.html).
+
+Default matrix cells use compact tokens (`clean`, `dirty`, `↑N`, `↓N`, `stale`, …). When machines share a branch but disagree on HEAD, cells include `tip≠<shortSHA>` so same-branch divergence is visible without `--inventory`. Local machine columns are marked with `*`. Stale machines are annotated in cells and summarized after output when remotes are loaded.
+
+Situation kinds (still detected; shown as Attention under `--inventory`, or via `check`) include:
+
+- Local error, dirty, unpushed, behind upstream, and untracked upstream (behind uses cached tracking refs; no automatic `git fetch`)
+- Cross-machine branch mismatch and same-branch tip mismatch (via published short HEAD SHAs) for the same project identity
+- Other machine has dirty work (pull will not help) or unpushed commits
+- Stale remote evidence when a remote attention-worthy snapshot is old
+
+With `--dirty-only`, the matrix is limited to projects that produced at least one situation (clean local clones are still scanned when remotes are enabled so cross-machine cues can fire). Load-error snapshot rows remain visible.
+
+Useful flags:
+
+| Flag | Meaning |
+|------|---------|
+| `--inventory` / `--verbose` | Path-centric Full inventory + Attention (former default layout) |
+| `--state-repo` | Local clone of the private sync Git repo |
+| `agent` | Soft command: background publish loop |
+| `install-scheduler` / `uninstall-scheduler` | Soft commands: OS autostart (install writes sticky config + smoke-publishes) |
+| `--interval` | Check interval: scan + publish decision (default `2m`) |
+| `--heartbeat` | Liveness commit when status unchanged (default `15m`) |
+| `--stale-ttl` | Staleness threshold (default `30m`; keep ≈ 2× `heartbeat`) |
+| `--tick-timeout` | Per-tick deadline for pull, scan, and publish (default `2m`; raise for very large scan roots) |
+| `--max-workers` | Max parallel repo checks (default `8`) |
+| `--machine-id` | Override hostname-based machine id |
+| `--redact-paths` | Publish basename-only paths |
+| `--no-remote` | Local scan only even if a state repo is configured |
+
 ## Output Example
 
-The tool now displays results in a clean tabular format:
+Default tree scan (Project × Machine matrix):
 
 ```
-Scanning for git repositories in: /home/username/projects
-This may take a while depending on the size of your drive...
+Projects  (you are laptop*)
+Project                         laptop*                    desktop                     laptop-old
+---------------------------------------------------------------------------------------------------------
+github.com/you/work-project     dirty · feature/pay        dirty · feature/pay        —
+github.com/you/notes            ↑3 · main                  clean                       —
+github.com/you/api              clean                      clean                       ↑2 stale
+github.com/you/docs             clean · tip≠aaa1111        clean · tip≠bbb2222        —
 
-Found 24 git repositories:
-
-Repository                                    Branch          Status   Changes
-------------------------------------------------------------------------------------------
-../my-project                                 main            ✅ Clean    -
-../work-project                               feature/new...  ⚠️  Dirty  unstaged, untracked
-../old-project                                develop         ⚠️  Dirty  staged
-../notes-project                              master          ⚠️  Dirty  unpushed
-
-Summary: 21 clean repositories, 3 repositories with uncommitted changes, 0 repositories with errors
+Summary: 3 local repos (3 need attention), 4 remote repos (3 need attention, 1 stale rows), 0 load errors
 ```
 
-The output shows:
+Opt-in path inventory (`--inventory` or `--verbose`) restores Attention + Full inventory:
+
+```
+Attention (suggestions only — no commands are run):
+  • github.com/you/work-project
+      → commit or stash local changes before switching machines
+  • github.com/you/work-project
+      → pull before continuing (behind upstream by 2 commit(s))
+
+Full inventory:
+Machine          Repository                                 Branch           Status             Changes
+--------------------------------------------------------------------------------------------------------------
+...
+```
+
+With a state repo configured, inventory adds a **Machine** column (local marked `*`), groups rows under project identity, and the footer is `Summary: N local repos (A need attention), M remote repos (B need attention, S stale rows), E load errors` (`--dirty-only`: `N local needing attention, M remote needing attention, E load errors`).
+
+Inventory columns:
+- **Attention**: Soft nudges for what to do next (never auto-executed)
 - **Repository**: Path to the git repository (truncated for readability)
 - **Branch**: Current branch name (truncated if too long)
-- **Status**: ✅ Clean or ⚠️ Dirty
+- **Status**: One of:
+   - ✅ Clean
+   - ⚠️ Dirty (working tree/index changes)
+   - 📭 Empty (`git init`, no commits yet — not an Attention local-error)
+   - ⬆️ Unpushed (ahead of upstream)
+   - ⬇️ Behind (behind upstream per cached tracking refs)
+   - ↕️ Diverged (both ahead and behind)
+   - 🔗 Untracked Upstream (branch has no configured upstream)
+   - ❌ Error
 - **Changes**: Specific types of changes detected:
   - `unstaged`: Modified files not yet staged
   - `staged`: Files staged for commit
   - `untracked`: New files not tracked by git
-  - `unpushed`: Commits that haven't been pushed to remote
+  - `unpushed` / `unpushed:N`: Commits that haven't been pushed to remote
+  - `behind` / `behind:N`: Commits present on upstream that aren't local yet
+  - `untracked-upstream`: Branch has no upstream tracking configuration
 
 ## Dirty-Only Mode
 
-Use the `--dirty-only` flag to show only repositories that have uncommitted changes:
+Use the `--dirty-only` flag to show only projects that need attention:
 
 ```bash
 ./find-uncommitted --dirty-only /home/username/projects
 ```
 
-This will filter out all clean repositories and show only those with:
-- Unstaged changes
-- Staged changes  
-- Untracked files
-- Unpushed commits
-- Git errors
+This keeps the matrix (or inventory under `--inventory`) limited to:
 
-This is particularly useful when you want to quickly identify which repositories need attention without scrolling through a long list of clean repositories.
+- Git errors
+- Unstaged / staged / untracked working-tree changes
+- Unpushed commits
+- Behind upstream (cached tracking refs)
+- Untracked upstream
+- Cross-machine situations (branch/tip mismatch, other-machine work, stale remote evidence) when a state repo is configured
+
+When remotes are enabled, clean local clones are still scanned so cues like "other machine has uncommitted work" can appear; only projects without any situation are hidden.
 
 ## CSV Export
 
@@ -120,10 +325,12 @@ Use the `--output` flag to save results to a CSV file for further analysis:
 ```
 
 The CSV file will contain the following columns:
+- **Machine** / **Local** / **Stale**: machine id and markers (local-only scans still include the local machine)
 - **Repository**: Path to the git repository
+- **Origin**: Normalized remote origin (when set)
 - **Branch**: Current branch name
-- **Status**: Clean, Dirty, or Error with details
-- **Changes**: Comma-separated list of change types (unstaged, staged, untracked, unpushed)
+- **Status**: Clean, Dirty, Empty, Unpushed, Behind, Diverged, UntrackedUpstream, or Error with details
+- **Changes**: Comma-separated list of change types (unstaged, staged, untracked, unpushed, behind, untracked-upstream)
 
 This is useful for:
 - Importing into spreadsheet applications for analysis
@@ -157,19 +364,19 @@ Use the included ownership fixer tool:
 #### Windows
 ```bash
 # Fix ownership issues for all repositories in a directory
-./fix-ownership-tool/fix-ownership.exe C:\somedirectory
+./fix-ownership.exe C:\somedirectory
 
 # With debug output
-./fix-ownership-tool/fix-ownership.exe --debug C:\somedirectory
+./fix-ownership.exe --debug C:\somedirectory
 ```
 
 #### Linux/macOS
 ```bash
 # Fix ownership issues for all repositories in a directory
-./fix-ownership-tool/fix-ownership /home/username/projects
+./fix-ownership /home/username/projects
 
 # With debug output
-./fix-ownership-tool/fix-ownership --debug /home/username/projects
+./fix-ownership --debug /home/username/projects
 ```
 
 This will automatically run the necessary `git config` commands to resolve ownership issues.
@@ -179,66 +386,80 @@ This will automatically run the necessary `git config` commands to resolve owner
 - Go 1.21 or later
 - Git installed and accessible from command line
 
+## License
+
+MIT — see [LICENSE](LICENSE).
+
 ## Building
+
+Compiled binaries are written to `binaries/` (gitignored). Create that directory if needed: `mkdir -p binaries`. After building, run via `./binaries/<name>` or put that directory on your `PATH` (usage examples below assume the tool is on `PATH` or invoked by name).
+
+CI (GitHub Actions) runs `go test ./...` on Ubuntu and Windows, then cross-compiles the main binary and ownership helper for linux/windows/darwin (amd64/arm64 where applicable). Integration tests that create commits set a local `user.name` / `user.email` in the fixture repo so they pass on runners with no global Git identity.
+
+### Install with Go
+
+Puts the binary on your `GOBIN` / `$(go env GOPATH)/bin` (ensure that directory is on `PATH`):
+
+```bash
+go install github.com/davidshq/find-uncommitted@latest
+# Optional ownership helper (binary name follows the package path):
+go install github.com/davidshq/find-uncommitted/fix-ownership-tool@latest
+```
+
+Use a commit or tag instead of `@latest` when you want a pinned revision. From a local clone, prefer `go build -o binaries/...` below so outputs stay in `binaries/`.
 
 ### Windows
 ```bash
-# Build the main executable
-go build -o find-uncommitted.exe main.go
+# Build the main executable (package ".", not main.go — the tool is multi-file)
+go build -o binaries/find-uncommitted.exe .
 
 # Build the ownership fixer
-cd fix-ownership-tool
-go build -o fix-ownership.exe fix-ownership.go
-cd ..
+go build -o binaries/fix-ownership.exe ./fix-ownership-tool
 ```
 
 ### Linux/macOS
 ```bash
-# Build the main executable
-go build -o find-uncommitted main.go
+# Build the main executable (package ".", not main.go — the tool is multi-file)
+go build -o binaries/find-uncommitted .
 
 # Build the ownership fixer
-cd fix-ownership-tool
-go build -o fix-ownership fix-ownership.go
-cd ..
+go build -o binaries/fix-ownership ./fix-ownership-tool
 ```
 
 ### Cross-platform build
 ```bash
 # Build for Windows from Linux/macOS
-GOOS=windows GOARCH=amd64 go build -o find-uncommitted.exe main.go
-cd fix-ownership-tool
-GOOS=windows GOARCH=amd64 go build -o fix-ownership.exe fix-ownership.go
-cd ..
+GOOS=windows GOARCH=amd64 go build -o binaries/find-uncommitted.exe .
+GOOS=windows GOARCH=amd64 go build -o binaries/fix-ownership.exe ./fix-ownership-tool
 
 # Build for Linux from Windows
-GOOS=linux GOARCH=amd64 go build -o find-uncommitted main.go
-cd fix-ownership-tool
-GOOS=linux GOARCH=amd64 go build -o fix-ownership fix-ownership.go
-cd ..
+GOOS=linux GOARCH=amd64 go build -o binaries/find-uncommitted .
+GOOS=linux GOARCH=amd64 go build -o binaries/fix-ownership ./fix-ownership-tool
 ```
 
 ## How it works
 
-1. **Directory Scanning**: Uses `filepath.Walk` to recursively scan the specified directory
-2. **Git Detection**: Looks for `.git` directories to identify git repositories
-3. **Status Checking**: For each repository found, runs git commands to check:
-   - Current branch
+1. **Directory Scanning**: Uses `filepath.Walk` via `internal/discover` to recursively scan the specified directory
+2. **Git Detection**: Looks for `.git` entries to identify git repositories — a `.git` **directory** (normal clone) or a `.git` **file** (linked worktree or submodule), so worktrees are scanned too
+3. **Git execution**: All scan/sync git subprocesses go through `internal/gitexec` (per-command deadlines, cancel, non-interactive env)
+4. **Status Checking**: For each repository found, runs git commands to check:
+   - Current branch and short HEAD SHA
    - Unstaged changes (`git diff --name-only`)
    - Staged changes (`git diff --cached --name-only`)
    - Untracked files (`git ls-files --others --exclude-standard`)
-   - Unpushed commits (`git rev-list --count @{u}..HEAD`)
-4. **Concurrent Processing**: Uses goroutines to check multiple repositories simultaneously
-5. **Results Filtering**: Optionally filters out clean repositories when using `--dirty-only` flag
-6. **Results Display**: Shows a formatted report with emojis and clear status indicators
-7. **CSV Export**: Optionally saves results to a CSV file for external analysis
-8. **Error Handling**: Provides specific guidance for common Git issues like ownership problems
+   - Ahead of upstream (`git rev-list --count @{u}..HEAD`) when tracking exists
+   - Behind upstream (`git rev-list --count HEAD..@{u}`) against cached tracking refs (no automatic fetch)
+5. **Concurrent Processing**: Uses goroutines to check multiple repositories simultaneously
+6. **Attention + inventory**: Builds soft situation nudges, then displays a formatted inventory (and optional CSV)
+7. **Error Handling**: Provides specific guidance for common Git issues like ownership problems
 
 ## Performance Notes
 
-- The application skips common system directories and build folders to improve scanning speed
-- Concurrent processing means checking many repositories won't take proportionally longer
-- Large drives may take several minutes to scan completely
+- The application skips common system directories, hidden (dot) directories, and build folders to improve scanning speed
+- The scan root itself is never skipped, so a hidden root such as `~/.dotfiles` is scanned normally; the dot rule only applies to directories *below* the root
+- Repo status checks run in parallel, capped at **8 workers** by default (`max_workers` in sticky config, `--max-workers`, or `FIND_UNCOMMITTED_MAX_WORKERS`) to avoid overloading git and the filesystem
+- Each git subprocess has a **30s** deadline; under heavy load a repo may report `git timed out or cancelled` instead of a false "invalid repository" error
+- Large scan roots may take several minutes to scan completely
 - Debug mode adds output but may slow down processing slightly
 
 ## Troubleshooting
@@ -250,4 +471,12 @@ Use the `--debug` flag to see detailed information about directory scanning and 
 If you see ownership errors, run the fix-ownership tool first, then run the main tool again.
 
 ### Timing Issues
-If the fix-ownership tool doesn't seem to work immediately, try running it with the `--debug` flag or wait a few seconds before running the main tool again. 
+If the fix-ownership tool doesn't seem to work immediately, try running it with the `--debug` flag or wait a few seconds before running the main tool again.
+
+### Git timeouts under load
+If many repos are scanned at once (e.g. an entire `code` tree), you may see `git timed out or cancelled` on otherwise healthy repos. Lower parallelism with `max_workers = 4` in sticky config, narrow `scan_root`, or re-run the scan. Timeouts are not the same as broken repositories.
+
+### Git exit status 128 and error detail
+Git uses exit code **128** as a generic fatal error — it does not mean one specific problem (missing upstream, empty repo, corrupt `.git`, etc.). find-uncommitted includes git's stderr detail in repository errors when available (for example `no such branch` or `does not have any commits yet`) instead of showing only `exit status 128`.
+
+**Empty repositories** (`git init` with no commits yet) are shown as **Empty** in the inventory and do not produce a "fix local git error" Attention nudge. Repos with real git failures still appear as errors with the fatal message preserved. 

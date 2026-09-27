@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Find Uncommitted — VS Code UI mockup</title>
+  <style>
+    :root {
+      --activity: #333333;
+      --sidebar: #252526;
+      --editor: #1e1e1e;
+      --title: #3c3c3c;
+      --status: #007acc;
+      --status-fg: #ffffff;
+      --tab: #2d2d2d;
+      --tab-active: #1e1e1e;
+      --border: #474747;
+      --fg: #cccccc;
+      --fg-dim: #858585;
+      --fg-bright: #ffffff;
+      --hover: #2a2d2e;
+      --list-active: #094771;
+      --warning: #cca700;
+      --warning-bg: #613214;
+      --input: #3c3c3c;
+      --widget: #252526;
+      --widget-shadow: rgba(0, 0, 0, 0.36);
+      --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-mono: "Cascadia Code", "Consolas", "Courier New", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #111;
+      color: var(--fg);
+      font-family: var(--font-ui);
+      font-size: 13px;
+    }
+
+    /* —— Mockup chrome around the VS Code window —— */
+    .page {
+      min-height: 100%;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 12px;
+      padding: 16px 20px 20px;
+    }
+    .page-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .page-header h1 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #ddd;
+      letter-spacing: 0.02em;
+    }
+    .page-header p {
+      margin: 4px 0 0;
+      color: #888;
+      font-size: 12px;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+    .controls label {
+      color: #888;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-right: 4px;
+    }
+    .controls button {
+      appearance: none;
+      border: 1px solid #444;
+      background: #1a1a1a;
+      color: #ccc;
+      padding: 6px 10px;
+      border-radius: 2px;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .controls button:hover { background: #242424; border-color: #666; }
+    .controls button[aria-pressed="true"] {
+      background: #094771;
+      border-color: #007acc;
+      color: #fff;
+    }
+    .controls button.secondary {
+      border-color: #555;
+      color: #aaa;
+    }
+
+    /* —— VS Code window —— */
+    .vscode {
+      display: grid;
+      grid-template-rows: 30px 1fr 22px;
+      min-height: 520px;
+      max-width: 1100px;
+      width: 100%;
+      margin: 0 auto;
+      border: 1px solid #000;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+      background: var(--editor);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .titlebar {
+      background: var(--title);
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      gap: 10px;
+      border-bottom: 1px solid #000;
+      user-select: none;
+    }
+    .traffic {
+      display: flex;
+      gap: 6px;
+    }
+    .traffic i {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      display: block;
+      background: #555;
+    }
+    .traffic .r { background: #ff5f57; }
+    .traffic .y { background: #febc2e; }
+    .traffic .g { background: #28c840; }
+    .titlebar .menubar {
+      display: flex;
+      gap: 12px;
+      color: var(--fg);
+      font-size: 12px;
+    }
+    .titlebar .center {
+      flex: 1;
+      text-align: center;
+      color: var(--fg-dim);
+      font-size: 12px;
+    }
+
+    .body {
+      display: grid;
+      grid-template-columns: 48px 220px 1fr;
+      min-height: 0;
+    }
+
+    .activity {
+      background: var(--activity);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding-top: 8px;
+      gap: 4px;
+      border-right: 1px solid #000;
+    }
+    .activity .icon {
+      width: 48px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      color: #858585;
+      position: relative;
+    }
+    .activity .icon.active {
+      color: #fff;
+    }
+    .activity .icon.active::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 8px;
+      bottom: 8px;
+      width: 2px;
+      background: #fff;
+    }
+    .activity svg { width: 24px; height: 24px; fill: currentColor; }
+
+    .sidebar {
+      background: var(--sidebar);
+      border-right: 1px solid #000;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .sidebar .section-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--fg);
+      padding: 10px 16px 8px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .tree {
+      padding: 0 0 8px;
+      overflow: auto;
+      font-size: 13px;
+    }
+    .tree .folder,
+    .tree .file {
+      padding: 3px 12px 3px 16px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      color: var(--fg);
+    }
+    .tree .file.active { background: var(--list-active); }
+    .tree .indent { padding-left: 28px; }
+    .tree .indent2 { padding-left: 40px; }
+    .tree .chev { color: var(--fg-dim); width: 10px; display: inline-block; }
+    .tree .mod { color: #e2c08d; margin-left: auto; font-size: 11px; }
+
+    .editor-col {
+      display: grid;
+      grid-template-rows: 35px 1fr;
+      min-width: 0;
+      background: var(--editor);
+    }
+    .tabs {
+      display: flex;
+      background: var(--tab);
+      border-bottom: 1px solid #000;
+      overflow: hidden;
+    }
+    .tab {
+      padding: 0 14px;
+      height: 35px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--tab);
+      color: var(--fg-dim);
+      border-right: 1px solid #252526;
+      font-size: 13px;
+    }
+    .tab.active {
+      background: var(--tab-active);
+      color: var(--fg);
+      border-top: 1px solid var(--tab-active);
+    }
+    .tab .x { color: transparent; }
+    .tab:hover .x, .tab.active .x { color: var(--fg-dim); }
+
+    .editor {
+      display: grid;
+      grid-template-columns: 48px 1fr;
+      overflow: auto;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 20px;
+      padding-top: 8px;
+    }
+    .gutter {
+      color: #858585;
+      text-align: right;
+      padding-right: 16px;
+      user-select: none;
+    }
+    .code { padding-right: 16px; white-space: pre; }
+    .kw { color: #569cd6; }
+    .str { color: #ce9178; }
+    .cm { color: #6a9955; }
+    .fn { color: #dcdcaa; }
+    .ty { color: #4ec9b0; }
+
+    /* Status bar — the product surface */
+    .statusbar {
+      background: var(--status);
+      color: var(--status-fg);
+      display: flex;
+      align-items: stretch;
+      justify-content: space-between;
+      font-size: 12px;
+      user-select: none;
+      position: relative;
+      z-index: 5;
+    }
+    .statusbar.attention {
+      /* keep blue bar; elevate only the FU item */
+    }
+    .sb-left, .sb-right {
+      display: flex;
+      align-items: stretch;
+    }
+    .sb-item {
+      padding: 0 8px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      cursor: default;
+    }
+    .sb-item:hover { background: rgba(255,255,255,0.12); }
+
+    /* Extension status item */
+    #fu-item {
+      font-weight: 500;
+      position: relative;
+    }
+    #fu-item.tier-clear { opacity: 0.85; font-weight: 400; }
+    #fu-item.tier-local { opacity: 0.9; font-weight: 400; }
+    #fu-item.tier-cross {
+      background: var(--warning-bg);
+      color: #ffd866;
+      font-weight: 600;
+    }
+    #fu-item.tier-cross:hover { background: #7a4218; }
+    #fu-item.tier-setup {
+      background: rgba(0,0,0,0.2);
+      color: #ffcc66;
+    }
+
+    /* Hover tooltip (status bar tooltip) */
+    .tooltip {
+      display: none;
+      position: absolute;
+      right: 8px;
+      bottom: calc(100% + 6px);
+      min-width: 360px;
+      max-width: 420px;
+      background: var(--widget);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      box-shadow: 0 2px 8px var(--widget-shadow);
+      padding: 10px 12px;
+      z-index: 20;
+      font-size: 12px;
+      line-height: 1.45;
+      pointer-events: none;
+    }
+    .tooltip.visible { display: block; }
+    .tooltip .title {
+      font-weight: 600;
+      color: var(--fg-bright);
+      margin-bottom: 6px;
+    }
+    .tooltip .machines {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--fg);
+      margin-bottom: 8px;
+      word-break: break-word;
+    }
+    .tooltip .nudge {
+      color: var(--fg);
+      margin: 2px 0;
+    }
+    .tooltip .nudge.loud { color: #e2c08d; }
+    .tooltip .ok { color: #89d185; }
+    .tooltip .foot {
+      margin-top: 8px;
+      padding-top: 6px;
+      border-top: 1px solid #333;
+      color: var(--fg-dim);
+      font-size: 11px;
+    }
+
+    /* Command palette */
+    .palette-backdrop {
+      display: none;
+      position: absolute;
+      inset: 30px 0 22px 0;
+      background: rgba(0,0,0,0.35);
+      z-index: 30;
+      align-items: flex-start;
+      justify-content: center;
+      padding-top: 12px;
+    }
+    .palette-backdrop.open { display: flex; }
+    .palette {
+      width: min(520px, 90%);
+      background: #252526;
+      border: 1px solid #454545;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+    .palette input {
+      width: 100%;
+      border: none;
+      outline: none;
+      background: var(--input);
+      color: #fff;
+      padding: 10px 12px;
+      font: inherit;
+      font-size: 14px;
+      border-bottom: 1px solid #454545;
+    }
+    .palette .cmd {
+      padding: 6px 12px;
+      display: flex;
+      justify-content: space-between;
+      color: var(--fg);
+      cursor: pointer;
+    }
+    .palette .cmd:hover,
+    .palette .cmd.active { background: var(--list-active); }
+    .palette .cmd .meta { color: var(--fg-dim); font-size: 11px; }
+
+    /* Details / Output channel drawer */
+    .output {
+      display: none;
+      position: absolute;
+      left: 48px;
+      right: 0;
+      bottom: 22px;
+      height: 140px;
+      background: #1e1e1e;
+      border-top: 1px solid #474747;
+      z-index: 15;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+    .output.open { display: grid; grid-template-rows: 28px 1fr; }
+    .output .otabs {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 12px;
+      background: #252526;
+      border-bottom: 1px solid #333;
+      color: var(--fg-dim);
+      font-family: var(--font-ui);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .output .otabs .on {
+      color: var(--fg);
+      border-bottom: 1px solid #fff;
+      height: 100%;
+      display: flex;
+      align-items: center;
+    }
+    .output pre {
+      margin: 0;
+      padding: 8px 12px;
+      white-space: pre-wrap;
+      color: var(--fg);
+      overflow: auto;
+    }
+
+    .page-footer {
+      max-width: 1100px;
+      margin: 0 auto;
+      width: 100%;
+      color: #777;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .page-footer code {
+      background: #1a1a1a;
+      padding: 1px 5px;
+      border-radius: 2px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="page-header">
+      <div>
+        <h1>Find Uncommitted — VS Code extension mockup</h1>
+        <p>Interactive prototype of status bar tiers, hover details, command palette, and Output channel. Not a screenshot.</p>
+      </div>
+      <div class="controls" role="group" aria-label="Status tier">
+        <label>State</label>
+        <button type="button" data-state="clear" aria-pressed="false">A Clear</button>
+        <button type="button" data-state="local" aria-pressed="false">B Local dirty</button>
+        <button type="button" data-state="cross" aria-pressed="true">C Cross-machine</button>
+        <button type="button" data-state="setup" aria-pressed="false">Missing binary</button>
+        <button type="button" class="secondary" id="btn-palette" title="Ctrl+Shift+P">Command palette</button>
+        <button type="button" class="secondary" id="btn-output">Show details</button>
+      </div>
+    </header>
+
+    <div class="vscode" id="vscode" aria-label="VS Code window mockup">
+      <div class="titlebar">
+        <div class="traffic" aria-hidden="true"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+        <div class="menubar" aria-hidden="true">
+          <span>File</span><span>Edit</span><span>Selection</span><span>View</span><span>Go</span><span>Run</span><span>Terminal</span><span>Help</span>
+        </div>
+        <div class="center">find-uncommitted — Visual Studio Code</div>
+      </div>
+
+      <div class="body">
+        <nav class="activity" aria-label="Activity bar">
+          <div class="icon active" title="Explorer">
+            <svg viewBox="0 0 16 16"><path d="M14 2H8L7 1H2L1 2v12l1 1h12l1-1V3l-1-1zM2 2h4.8l.8.9H2V2zm12 12H2V4h12v10z"/></svg>
+          </div>
+          <div class="icon" title="Search">
+            <svg viewBox="0 0 16 16"><path d="M15.25 14.6l-3.4-3.4a6 6 0 10-.7.7l3.4 3.4.7-.7zM6.5 11.5a5 5 0 110-10 5 5 0 010 10z"/></svg>
+          </div>
+          <div class="icon" title="Source Control">
+            <svg viewBox="0 0 16 16"><path d="M13 8a2 2 0 10-1.97-1.7L7.5 8.55a2 2 0 100 1.9l3.53 2.25A2 2 0 1013 11.3l-3.53-2.25a2.05 2.05 0 000-.1L13 6.7c.3.2.7.3 1 .3z"/></svg>
+          </div>
+        </nav>
+
+        <aside class="sidebar">
+          <div class="section-title"><span>Explorer</span><span>⋯</span></div>
+          <div class="tree">
+            <div class="folder"><span class="chev">▾</span> FIND-UNCOMMITTED</div>
+            <div class="file indent"><span class="chev">▸</span> .github</div>
+            <div class="file indent active"><span class="chev">▾</span> check.go <span class="mod">M</span></div>
+            <div class="file indent"><span class="chev">▸</span> openspec</div>
+            <div class="file indent">main.go</div>
+            <div class="file indent">README.md</div>
+            <div class="file indent">situations.go</div>
+          </div>
+        </aside>
+
+        <section class="editor-col">
+          <div class="tabs">
+            <div class="tab active">check.go <span class="x">✕</span></div>
+            <div class="tab">main.go <span class="x">✕</span></div>
+          </div>
+          <div class="editor" aria-hidden="true">
+            <div class="gutter">53<br>54<br>55<br>56<br>57<br>58<br>59<br>60</div>
+            <div class="code"><span class="cm">// runCheckMode live-checks one repo…</span>
+<span class="kw">func</span> <span class="fn">runCheckMode</span>(ctx context.<span class="ty">Context</span>, path <span class="ty">string</span>) <span class="ty">int</span> {
+	<span class="kw">if</span> strings.TrimSpace(path) == <span class="str">""</span> {
+		<span class="fn">fmt</span>.Fprintln(os.Stderr, <span class="str">"Error: check requires a path"</span>)
+		<span class="kw">return</span> exitCheckError
+	}
+	…
+}</div>
+          </div>
+        </section>
+      </div>
+
+      <footer class="statusbar" id="statusbar">
+        <div class="sb-left">
+          <div class="sb-item" title="Remote"> monocle</div>
+          <div class="sb-item">main*</div>
+          <div class="sb-item">0↓ 2↑</div>
+        </div>
+        <div class="sb-right">
+          <div class="sb-item" id="fu-item" class="tier-cross" tabindex="0" role="button"
+               aria-label="Find Uncommitted status"
+               aria-describedby="fu-tooltip">
+            <span id="fu-label">$(warning) FU · desktop</span>
+          </div>
+          <div class="sb-item">Ln 55, Col 1</div>
+          <div class="sb-item">{ } Go</div>
+          <div class="sb-item">UTF-8</div>
+        </div>
+
+        <div class="tooltip" id="fu-tooltip" role="tooltip"></div>
+      </footer>
+
+      <div class="palette-backdrop" id="palette" aria-hidden="true">
+        <div class="palette" role="dialog" aria-label="Command palette">
+          <input type="text" value=">Find Uncommitted" readonly />
+          <div class="cmd active" data-action="check">
+            <span>Find Uncommitted: Check Workspace</span>
+            <span class="meta">recently used</span>
+          </div>
+          <div class="cmd" data-action="refresh">
+            <span>Find Uncommitted: Refresh</span>
+            <span class="meta"></span>
+          </div>
+          <div class="cmd" data-action="details">
+            <span>Find Uncommitted: Show Details</span>
+            <span class="meta"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="output" id="output" aria-label="Output channel">
+        <div class="otabs"><span class="on">Output</span><span>Find Uncommitted</span><span style="margin-left:auto">✕</span></div>
+        <pre id="output-body"></pre>
+      </div>
+    </div>
+
+    <p class="page-footer">
+      Hover or focus the <code>FU</code> status item for the tooltip. Use the state buttons to compare tiers.
+      Palette and Show Details match the design: nudge-only, no git mutations.
+      File: <code>openspec/changes/vscode-extension/mockup/index.html</code>
+    </p>
+  </div>
+
+  <script>
+    const STATES = {
+      clear: {
+        tier: "tier-clear",
+        label: "FU · ok",
+        tooltip: {
+          title: "find-uncommitted",
+          machines: "find-uncommitted  laptop*: clean on main  ·  desktop: clean on main",
+          nudges: [{ text: "→ ok", cls: "ok" }],
+          foot: "Find Uncommitted · check · exit 0"
+        },
+        output: "find-uncommitted  laptop*: clean on main  ·  desktop: clean on main\n→ ok"
+      },
+      local: {
+        tier: "tier-local",
+        label: "FU · dirty",
+        tooltip: {
+          title: "find-uncommitted",
+          machines: "find-uncommitted  laptop*: dirty on main (unstaged)  ·  desktop: clean on main",
+          nudges: [
+            { text: "→ commit or stash local changes", cls: "" }
+          ],
+          foot: "Find Uncommitted · check · exit 2 · local only (quiet)"
+        },
+        output: "find-uncommitted  laptop*: dirty on main (unstaged)  ·  desktop: clean on main\n→ commit or stash local changes"
+      },
+      cross: {
+        tier: "tier-cross",
+        label: "$(warning) FU · desktop",
+        tooltip: {
+          title: "find-uncommitted",
+          machines: "find-uncommitted  laptop*: clean on main  ·  desktop: dirty on main (unstaged)",
+          nudges: [
+            { text: "→ unfinished work on desktop — pull will not get it", cls: "loud" },
+            { text: "→ consider committing or stashing on desktop before continuing here", cls: "loud" }
+          ],
+          foot: "Find Uncommitted · check · exit 2 · cross-machine (elevated)"
+        },
+        output: "find-uncommitted  laptop*: clean on main  ·  desktop: dirty on main (unstaged)\n→ unfinished work on desktop — pull will not get it\n→ consider committing or stashing on desktop before continuing here"
+      },
+      setup: {
+        tier: "tier-setup",
+        label: "FU · setup",
+        tooltip: {
+          title: "find-uncommitted",
+          machines: "Binary not found on PATH.",
+          nudges: [
+            { text: "→ install find-uncommitted or set findUncommitted.binaryPath", cls: "loud" }
+          ],
+          foot: "Find Uncommitted · soft failure · no tight retry loop"
+        },
+        output: "Error: find-uncommitted binary not found.\nSet findUncommitted.binaryPath or install the CLI on PATH."
+      }
+    };
+
+    let current = "cross";
+    const fuItem = document.getElementById("fu-item");
+    const fuLabel = document.getElementById("fu-label");
+    const tooltip = document.getElementById("fu-tooltip");
+    const output = document.getElementById("output");
+    const outputBody = document.getElementById("output-body");
+    const palette = document.getElementById("palette");
+
+    function renderTooltip(data) {
+      const nudges = data.nudges.map(n =>
+        `<div class="nudge ${n.cls}">${escapeHtml(n.text)}</div>`
+      ).join("");
+      tooltip.innerHTML =
+        `<div class="title">${escapeHtml(data.title)}</div>` +
+        `<div class="machines">${escapeHtml(data.machines)}</div>` +
+        nudges +
+        `<div class="foot">${escapeHtml(data.foot)}</div>`;
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[c]));
+    }
+
+    function applyState(name) {
+      current = name;
+      const s = STATES[name];
+      fuItem.className = s.tier;
+      // Show warning glyph as text approximating codicon
+      fuLabel.textContent = s.label.replace("$(warning) ", "⚠ ");
+      renderTooltip(s.tooltip);
+      outputBody.textContent = s.output;
+      document.querySelectorAll(".controls [data-state]").forEach(btn => {
+        btn.setAttribute("aria-pressed", btn.dataset.state === name ? "true" : "false");
+      });
+    }
+
+    function showTooltip(on) {
+      tooltip.classList.toggle("visible", on);
+    }
+
+    fuItem.addEventListener("mouseenter", () => showTooltip(true));
+    fuItem.addEventListener("mouseleave", () => showTooltip(false));
+    fuItem.addEventListener("focus", () => showTooltip(true));
+    fuItem.addEventListener("blur", () => showTooltip(false));
+    fuItem.addEventListener("click", () => {
+      output.classList.add("open");
+    });
+
+    document.querySelectorAll(".controls [data-state]").forEach(btn => {
+      btn.addEventListener("click", () => applyState(btn.dataset.state));
+    });
+
+    document.getElementById("btn-palette").addEventListener("click", () => {
+      palette.classList.add("open");
+      palette.setAttribute("aria-hidden", "false");
+    });
+    document.getElementById("btn-output").addEventListener("click", () => {
+      output.classList.toggle("open");
+    });
+
+    palette.addEventListener("click", (e) => {
+      if (e.target === palette) {
+        palette.classList.remove("open");
+        palette.setAttribute("aria-hidden", "true");
+      }
+    });
+    document.querySelectorAll(".palette .cmd").forEach(cmd => {
+      cmd.addEventListener("click", () => {
+        const action = cmd.dataset.action;
+        palette.classList.remove("open");
+        if (action === "details" || action === "check" || action === "refresh") {
+          output.classList.add("open");
+        }
+      });
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        palette.classList.add("open");
+      }
+      if (e.key === "Escape") {
+        palette.classList.remove("open");
+        output.classList.remove("open");
+        showTooltip(false);
+      }
+    });
+
+    applyState("cross");
+  </script>
+</body>
+</html>
