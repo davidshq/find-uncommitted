@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 
-	"find-uncommitted/internal/discover"
-	"find-uncommitted/internal/gitexec"
+	"github.com/davidshq/find-uncommitted/internal/discover"
+	"github.com/davidshq/find-uncommitted/internal/gitexec"
 )
 
 var debugMode bool
@@ -62,6 +62,8 @@ func main() {
 	flag.IntVar(&maxWorkers, "max-workers", 0, fmt.Sprintf("Max parallel repo checks (default %d; 0 = default)", gitexec.DefaultMaxWorkers))
 	var jsonOutput bool
 	flag.BoolVar(&jsonOutput, "json", false, "With check: print machine-readable JSON to stdout (human text remains default)")
+	var printConfig bool
+	flag.BoolVar(&printConfig, "print-config", false, "Print resolved settings with sources and exit")
 	flag.Parse()
 	if verboseOut {
 		showInventory = true
@@ -83,6 +85,7 @@ func main() {
 	args := flag.Args()
 	checkMode := false
 	checkPath := ""
+	doctorMode := false
 	var rootDirArg string
 	if len(args) >= 1 && args[0] == "check" {
 		checkMode = true
@@ -95,6 +98,13 @@ func main() {
 		if checkJSON {
 			jsonOutput = true
 		}
+	} else if len(args) >= 1 && args[0] == "doctor" {
+		if len(args) > 1 {
+			fmt.Fprintf(os.Stderr, "Error: doctor takes no arguments\n")
+			fmt.Fprintln(os.Stderr, "Usage: find-uncommitted [flags] doctor")
+			os.Exit(1)
+		}
+		doctorMode = true
 	} else if len(args) >= 1 {
 		rootDirArg = args[0]
 	}
@@ -182,8 +192,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	// Skip on check: pre-flight stderr should stay signal, not config lectures.
-	if stateRepo != "" && !checkMode {
+	// Skip on check/doctor/print-config: those paths should stay signal, not config lectures.
+	if stateRepo != "" && !checkMode && !doctorMode && !printConfig {
 		warnStaleTTLMismatch(heartbeat, staleTTL)
 	}
 
@@ -191,6 +201,12 @@ func main() {
 		if abs, err := filepath.Abs(stateRepo); err == nil {
 			stateRepo = abs
 		}
+	}
+
+	if printConfig {
+		configExists := configPath != "" && ConfigFileExists(configPath)
+		printConfigToStdout(configPath, configExists, resolved, machineID, intervalStr, heartbeatStr, staleTTLStr, maxWorkers, tickTimeoutStr, flagSet["tick-timeout"])
+		return
 	}
 
 	// Path-scoped pre-flight: no scan-root required.
@@ -205,6 +221,24 @@ func main() {
 			rootDir = abs
 		}
 	}
+
+	if doctorMode {
+		os.Exit(runDoctorMode(DoctorInput{
+			ConfigPath:   configPath,
+			ConfigExists: configPath != "" && ConfigFileExists(configPath),
+			Resolved:     resolved,
+			MachineID:    machineID,
+			StateRepo:    stateRepo,
+			ScanRoot:     rootDir,
+			Interval:     intervalStr,
+			Heartbeat:    heartbeatStr,
+			StaleTTL:     staleTTLStr,
+			StaleTTLDur:  staleTTL,
+			MaxWorkers:   maxWorkers,
+			TickTimeout:  tickTimeoutStr,
+		}))
+	}
+
 	if rootDir == "" {
 		printUsage()
 		os.Exit(1)
@@ -350,6 +384,7 @@ func main() {
 func printUsage() {
 	fmt.Println("Usage: find-uncommitted [flags] [directory_to_scan]")
 	fmt.Println("       find-uncommitted [flags] check [--json] <path>")
+	fmt.Println("       find-uncommitted [flags] doctor")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  find-uncommitted C:\\code")
@@ -361,11 +396,15 @@ func printUsage() {
 	fmt.Println("  find-uncommitted check ~/repos/work-project")
 	fmt.Println("  find-uncommitted --json check .")
 	fmt.Println("  find-uncommitted --no-remote check .")
+	fmt.Println("  find-uncommitted --print-config")
+	fmt.Println("  find-uncommitted doctor")
 	fmt.Println()
 	fmt.Println("Default tree scan prints a Project x Machine matrix.")
 	fmt.Println("--inventory / --verbose  Path-centric Full inventory + Attention (former default).")
 	fmt.Println("check [--json] <path>  Pre-flight one repo (exit 0=ok, 2=attention, 1=error).")
 	fmt.Println("  --json  Machine-readable JSON on stdout (schemaVersion 1); warnings stay on stderr.")
+	fmt.Println("--print-config  Print resolved settings with sources (flag/env/config/default) and exit.")
+	fmt.Println("doctor  Operability report: config, locks, last publish, scheduler, state-repo health.")
 	fmt.Println("After --install-scheduler, sticky config enables aggregate remotes on bare scans.")
 	fmt.Println("Install smoke-publishes one snapshot so you can confirm the state repo works.")
 	fmt.Println("Scan root may come from config when the directory argument is omitted.")

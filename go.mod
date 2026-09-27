@@ -1,4 +1,4 @@
-module find-uncommitted
+module github.com/davidshq/find-uncommitted
 
 go 1.21
 

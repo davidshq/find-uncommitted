@@ -14,3 +14,11 @@ func installScheduler(_ string) error {
 func uninstallScheduler() error {
 	return fmt.Errorf("scheduler uninstall is not supported on %s (Windows and Linux only in this release)", runtime.GOOS)
 }
+
+func schedulerStatus() (SchedulerStatus, error) {
+	return SchedulerStatus{
+		Supported: false,
+		Name:      "n/a",
+		Detail:    fmt.Sprintf("unsupported on %s", runtime.GOOS),
+	}, nil
+}

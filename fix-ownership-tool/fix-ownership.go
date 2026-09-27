@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"find-uncommitted/internal/discover"
+	"github.com/davidshq/find-uncommitted/internal/discover"
 )
 
 var debugMode bool

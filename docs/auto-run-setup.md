@@ -135,6 +135,13 @@ journalctl --user -u find-uncommitted-agent.service -n 50 --no-pager
 
 You should also see a new/updated file under `machines/` in the state clone after a successful tick.
 
+Quick operability report (config, locks, last publish, service health):
+
+```bash
+./binaries/find-uncommitted doctor
+./binaries/find-uncommitted --print-config
+```
+
 ### Uninstall
 
 ```bash
@@ -189,6 +196,13 @@ schtasks /Run /TN FindUncommittedAgent
 Or open **Task Scheduler** → Task Scheduler Library → `FindUncommittedAgent`.
 
 Confirm a snapshot under `machines\` in the state clone after a tick.
+
+Quick operability report (config, locks, last publish, task/service health):
+
+```powershell
+.\binaries\find-uncommitted.exe doctor
+.\binaries\find-uncommitted.exe --print-config
+```
 
 ### Uninstall
 

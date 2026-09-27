@@ -79,6 +79,66 @@ func uninstallScheduler() error {
 	return nil
 }
 
+func schedulerStatus() (SchedulerStatus, error) {
+	status := SchedulerStatus{
+		Supported:        true,
+		Name:             systemdService,
+		NotRunningIsFail: true,
+	}
+	enabledOut, enabledErr := exec.Command("systemctl", "--user", "is-enabled", systemdService).CombinedOutput()
+	activeOut, activeErr := exec.Command("systemctl", "--user", "is-active", systemdService).CombinedOutput()
+	enabledText := strings.TrimSpace(string(enabledOut))
+	activeText := strings.TrimSpace(string(activeOut))
+	if systemdUserBusUnavailable(enabledText, activeText) {
+		unitPath := linuxSystemdUnitPath()
+		status.Installed = unitPath != "" && ConfigFileExists(unitPath)
+		status.Running = false
+		status.NotRunningIsFail = false // cannot probe without a user bus
+		if status.Installed {
+			status.Detail = "unit present; systemd user bus unavailable"
+		} else {
+			status.Detail = "systemd user bus unavailable"
+		}
+		return status, nil
+	}
+	enabled := enabledErr == nil && enabledText == "enabled"
+	active := activeErr == nil && activeText == "active"
+	unitPath := linuxSystemdUnitPath()
+	unitExists := unitPath != "" && ConfigFileExists(unitPath)
+	status.Installed = enabled || active || unitExists
+	status.Running = active
+	switch {
+	case !status.Installed:
+		status.Detail = "unit not found"
+	case active:
+		status.Detail = fmt.Sprintf("enabled=%v active=active", enabled)
+	default:
+		activeState := activeText
+		if activeState == "" {
+			activeState = "unknown"
+		}
+		status.Detail = fmt.Sprintf("enabled=%v active=%s", enabled, activeState)
+	}
+	return status, nil
+}
+
+func linuxSystemdUnitPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "systemd", "user", systemdService)
+}
+
+func systemdUserBusUnavailable(texts ...string) bool {
+	for _, t := range texts {
+		if strings.Contains(t, "Failed to connect to bus") {
+			return true
+		}
+	}
+	return false
+}
+
 func quoteSystemd(s string) string {
 	if s == "" {
 		return `""`

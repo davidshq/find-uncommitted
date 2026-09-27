@@ -54,6 +54,50 @@ func uninstallScheduler() error {
 	return nil
 }
 
+func schedulerStatus() (SchedulerStatus, error) {
+	status := SchedulerStatus{
+		Supported:        true,
+		Name:             schedulerTaskName,
+		NotRunningIsFail: false, // at-logon task is often Ready between runs / before logon
+	}
+	cmd := exec.Command("schtasks", "/Query", "/TN", schedulerTaskName, "/FO", "LIST", "/V")
+	out, err := cmd.CombinedOutput()
+	text := string(out)
+	if err != nil {
+		lower := strings.ToLower(text)
+		if strings.Contains(lower, "cannot find") || strings.Contains(lower, "ERROR: The system cannot find") || strings.Contains(lower, "does not exist") {
+			status.Detail = "task not found"
+			return status, nil
+		}
+		return status, fmt.Errorf("query task: %w (%s)", err, strings.TrimSpace(text))
+	}
+	status.Installed = true
+	taskStatus := windowsTaskStatusLine(text)
+	status.Running = strings.EqualFold(taskStatus, "Running")
+	if taskStatus == "" {
+		taskStatus = "unknown"
+	}
+	status.Detail = fmt.Sprintf("Status=%s", taskStatus)
+	return status, nil
+}
+
+func windowsTaskStatusLine(queryOutput string) string {
+	for _, line := range strings.Split(queryOutput, "\n") {
+		line = strings.TrimSpace(line)
+		if len(line) < 7 {
+			continue
+		}
+		// schtasks LIST uses "Status:" (English). Match prefix case-insensitively.
+		if strings.EqualFold(line[:7], "Status:") || strings.HasPrefix(strings.ToLower(line), "status:") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				return strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	return ""
+}
+
 func windowsTaskUserID() (string, error) {
 	domain := strings.TrimSpace(os.Getenv("USERDOMAIN"))
 	name := strings.TrimSpace(os.Getenv("USERNAME"))

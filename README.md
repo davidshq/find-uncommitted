@@ -9,6 +9,7 @@ A Go application that scans your hard drive for git repositories and reports on 
 - 📊 **Detailed reporting**: Shows branch name, unstaged/staged/untracked changes, unpushed commits, and behind-upstream status
 - 💡 **Attention nudges**: Soft suggestions (commit, push, pull, branch mismatch, other-machine work) — never auto-runs git on your repos
 - ✈️ **`check <path>` pre-flight**: Compact project × machine status for one repo (scriptable exit codes + `--json`)
+- 🩺 **`doctor` / `--print-config`**: Operability report and resolved settings with sources
 - 🧩 **Editor extension**: VS Code / Cursor thin client — see [vscode-extension/](vscode-extension/)
 - 🚫 **Smart filtering**: Skips system directories and common build folders to improve performance
 - 📈 **Summary statistics**: Provides a count of clean vs. dirty repositories
@@ -120,6 +121,18 @@ stale_ttl = "5m"
 **Precedence:** CLI flags > environment variables > config file > built-in defaults.
 
 Useful env vars: `FIND_UNCOMMITTED_STATE_REPO`, `FIND_UNCOMMITTED_SCAN_ROOT`, `FIND_UNCOMMITTED_MACHINE_ID`, `FIND_UNCOMMITTED_INTERVAL`, `FIND_UNCOMMITTED_HEARTBEAT`, `FIND_UNCOMMITTED_STALE_TTL`, `FIND_UNCOMMITTED_REDACT_PATHS`, `FIND_UNCOMMITTED_MAX_WORKERS`.
+
+Inspect what will actually be used (value + source):
+
+```bash
+./binaries/find-uncommitted --print-config
+```
+
+Operability check (config path, agent/sync locks, last publish, scheduler health, state-repo validity):
+
+```bash
+./binaries/find-uncommitted doctor   # exit 0 = no FAIL lines; exit 1 = at least one FAIL
+```
 
 When config supplies `state_repo`, the CLI prints a short stderr notice and aggregates remotes. Use `--no-remote` for a local-only scan. If the configured state clone path is missing or invalid, the scan **exits with an error** (so a bad sticky config cannot silently look like a local-only machine). If the clone is valid but offline/`git pull` fails, the tool warns and still shows local results plus any on-disk snapshots. Corrupt individual snapshot JSON files are skipped with a stderr warning; valid siblings still appear in the aggregate.
 
@@ -368,9 +381,27 @@ This will automatically run the necessary `git config` commands to resolve owner
 - Go 1.21 or later
 - Git installed and accessible from command line
 
+## License
+
+MIT — see [LICENSE](LICENSE).
+
 ## Building
 
 Compiled binaries are written to `binaries/` (gitignored). Create that directory if needed: `mkdir -p binaries`. After building, run via `./binaries/<name>` or put that directory on your `PATH` (usage examples below assume the tool is on `PATH` or invoked by name).
+
+CI (GitHub Actions) runs `go test ./...` on Ubuntu and Windows, then cross-compiles the main binary and ownership helper for linux/windows/darwin (amd64/arm64 where applicable).
+
+### Install with Go
+
+Puts the binary on your `GOBIN` / `$(go env GOPATH)/bin` (ensure that directory is on `PATH`):
+
+```bash
+go install github.com/davidshq/find-uncommitted@latest
+# Optional ownership helper (binary name follows the package path):
+go install github.com/davidshq/find-uncommitted/fix-ownership-tool@latest
+```
+
+Use a commit or tag instead of `@latest` when you want a pinned revision. From a local clone, prefer `go build -o binaries/...` below so outputs stay in `binaries/`.
 
 ### Windows
 ```bash
