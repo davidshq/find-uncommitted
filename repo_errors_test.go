@@ -98,13 +98,13 @@ func TestCheckRepoStatusEmptyRepository(t *testing.T) {
 	if st.Error != "" {
 		t.Fatalf("expected no error for empty repo, got %q", st.Error)
 	}
-	if repoNeedsAttention(st) {
+	if snapshotNeedsAttention(st) {
 		t.Fatal("empty repo should not need attention")
 	}
 }
 
 func TestCheckRepoStatusWaitDelayNotInvalidRepo(t *testing.T) {
-	st := RepoStatus{}
+	st := RepoSnapshot{}
 	if !setGitCancelled(context.Background(), &st, exec.ErrWaitDelay) {
 		t.Fatal("expected WaitDelay to be classified as timeout")
 	}

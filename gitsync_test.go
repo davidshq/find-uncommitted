@@ -221,7 +221,7 @@ func TestPublishCommitsOnHeartbeat(t *testing.T) {
 }
 
 func TestBuildMachineSnapshotSortsByPath(t *testing.T) {
-	results := []RepoStatus{
+	results := []RepoSnapshot{
 		{Path: "/z", Branch: "main", IsClean: true},
 		{Path: "/a", Branch: "main", IsClean: true},
 	}

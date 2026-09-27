@@ -26,20 +26,8 @@ type AgentConfig struct {
 	LockPath     string
 }
 
-// DefaultAgentInterval is the default check cadence (scan + publish decision).
-const DefaultAgentInterval = 2 * time.Minute
-
-// DefaultStaleTTL marks remote snapshots stale when older than this.
-// Kept at roughly 2× DefaultHeartbeat so a quiet healthy agent is not marked stale.
-const DefaultStaleTTL = 30 * time.Minute
-
-// DefaultIntervalString / DefaultStaleTTLString are Go duration strings for flags and sticky config.
-const (
-	DefaultIntervalString    = "2m"
-	DefaultStaleTTLString    = "30m"
-	DefaultHeartbeatString   = "15m"
-	DefaultTickTimeoutString = "2m"
-)
+// DefaultAgentInterval / DefaultStaleTTL / DefaultHeartbeat and their string
+// forms live in duration.go so flags and runtime share one source of truth.
 
 // agentLock holds an exclusive flock-style lock file for the agent process.
 type agentLock struct {
@@ -216,7 +204,7 @@ func publishAgentSnapshot(ctx context.Context, cfg AgentConfig) (MachineSnapshot
 // checkRepoStatuses checks each repo path concurrently and optionally filters clean repos.
 // When ctx is cancelled, no further repos are scheduled so a timed-out agent tick
 // does not keep spawning git for the rest of a large scan root.
-func checkRepoStatuses(ctx context.Context, repos []string, dirtyOnlyFilter bool, maxWorkers int) []RepoStatus {
+func checkRepoStatuses(ctx context.Context, repos []string, dirtyOnlyFilter bool, maxWorkers int) []RepoSnapshot {
 	if len(repos) == 0 {
 		return nil
 	}
@@ -224,7 +212,7 @@ func checkRepoStatuses(ctx context.Context, repos []string, dirtyOnlyFilter bool
 	maxWorkers = repoCheckWorkerCount(maxWorkers, len(repos))
 
 	jobs := make(chan string)
-	statusChan := make(chan RepoStatus, len(repos))
+	statusChan := make(chan RepoSnapshot, len(repos))
 	var wg sync.WaitGroup
 
 	for i := 0; i < maxWorkers; i++ {
@@ -257,9 +245,9 @@ feed:
 		close(statusChan)
 	}()
 
-	var results []RepoStatus
+	var results []RepoSnapshot
 	for status := range statusChan {
-		if dirtyOnlyFilter && !repoNeedsAttention(status) {
+		if dirtyOnlyFilter && !snapshotNeedsAttention(status) {
 			continue
 		}
 		results = append(results, status)

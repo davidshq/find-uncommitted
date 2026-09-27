@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,14 +13,16 @@ import (
 	"time"
 )
 
-// RepoSnapshot is the serializable form of a single repository's status.
+// RepoSnapshot is one repository's status: used for live scans, on-disk machine
+// state, and aggregate views. Ahead/behind counts use already-known upstream
+// tracking refs (no fetch).
 // Origin is the normalized remote.origin.url used to correlate the same project
 // across machines (empty when the repo has no origin remote).
 // Newer fields (HasBehind, counts, HeadSHA) are omitempty so older snapshots
 // without them still load and simply report no behind/SHA evidence.
 type RepoSnapshot struct {
 	Path                 string `json:"path"`
-	Origin               string `json:"origin,omitempty"`
+	Origin               string `json:"origin,omitempty"` // normalized remote.origin.url; empty if none
 	Branch               string `json:"branch"`
 	HasUnstaged          bool   `json:"has_unstaged"`
 	HasStaged            bool   `json:"has_staged"`
@@ -26,12 +30,12 @@ type RepoSnapshot struct {
 	HasUnpushed          bool   `json:"has_unpushed"`
 	HasBehind            bool   `json:"has_behind,omitempty"`
 	HasUntrackedUpstream bool   `json:"has_untracked_upstream"`
-	AheadCount           int    `json:"ahead_count,omitempty"`
-	BehindCount          int    `json:"behind_count,omitempty"`
-	HeadSHA              string `json:"head_sha,omitempty"`
+	AheadCount           int    `json:"ahead_count,omitempty"`  // commits ahead of upstream (0 if none/unknown)
+	BehindCount          int    `json:"behind_count,omitempty"` // commits behind upstream (0 if none/unknown)
+	HeadSHA              string `json:"head_sha,omitempty"`     // short HEAD SHA for cross-machine tip comparison
 	IsDirty              bool   `json:"is_dirty"`
 	IsClean              bool   `json:"is_clean"`
-	IsEmpty              bool   `json:"is_empty,omitempty"`
+	IsEmpty              bool   `json:"is_empty,omitempty"` // git init with no commits yet
 	Error                string `json:"error,omitempty"`
 }
 
@@ -94,44 +98,46 @@ func sanitizeMachineID(id string) string {
 	return replacer.Replace(id)
 }
 
-// RepoStatusToSnapshot converts a live scan result into snapshot form.
-// When redactPaths is set, filesystem paths are basename-only and origin URLs
-// are replaced with a stable hash so cross-machine correlation still works.
-func RepoStatusToSnapshot(status RepoStatus, redactPaths bool) RepoSnapshot {
-	path := status.Path
-	origin := status.Origin
-	if redactPaths {
-		path = redactPath(path)
-		origin = redactOrigin(origin)
+// maybeRedactRepoSnapshot returns snap unchanged, or with path/origin redacted
+// when redactPaths is set (basename paths + hashed origins for publish).
+func maybeRedactRepoSnapshot(snap RepoSnapshot, redactPaths bool) RepoSnapshot {
+	if !redactPaths {
+		return snap
 	}
-	return RepoSnapshot{
-		Path:                 path,
-		Origin:               origin,
-		Branch:               status.Branch,
-		HasUnstaged:          status.HasUnstaged,
-		HasStaged:            status.HasStaged,
-		HasUntracked:         status.HasUntracked,
-		HasUnpushed:          status.HasUnpushed,
-		HasBehind:            status.HasBehind,
-		HasUntrackedUpstream: status.HasUntrackedUpstream,
-		AheadCount:           status.AheadCount,
-		BehindCount:          status.BehindCount,
-		HeadSHA:              status.HeadSHA,
-		IsDirty:              status.IsDirty,
-		IsClean:              status.IsClean,
-		IsEmpty:              status.IsEmpty,
-		Error:                status.Error,
+	snap.Path = redactPath(snap.Path)
+	snap.Origin = redactOrigin(snap.Origin)
+	return snap
+}
+
+// loadRemoteSnapshots pulls the state clone (read-only) then loads on-disk machine
+// snapshots. Pull failures are warned on stderr; snapshots are still loaded when
+// possible. Caller must validate stateRepo first. loaded is false when the
+// machines directory cannot be read.
+func loadRemoteSnapshots(ctx context.Context, stateRepo, machineID string, staleTTL time.Duration) (remote []LoadedSnapshot, loaded bool) {
+	if err := PullStateRepoReadOnly(ctx, SyncConfig{StateRepoDir: stateRepo, MachineID: machineID}); err != nil {
+		if errors.Is(err, ErrStateRepoBusy) {
+			fmt.Fprintln(os.Stderr, "warning: agent is syncing state repo; using on-disk snapshots")
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+		}
 	}
+	remote, err := LoadAllMachineSnapshots(stateRepo, staleTTL, time.Now().UTC())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed loading remote snapshots: %v\n", err)
+		return nil, false
+	}
+	warnCorruptSnapshots(remote)
+	return remote, true
 }
 
 // BuildMachineSnapshot creates a snapshot from scan results.
 // Repos are sorted by path so concurrent scans don't churn commits.
-func BuildMachineSnapshot(machineID, scanRoot string, results []RepoStatus, started time.Time, redactPaths bool) MachineSnapshot {
+func BuildMachineSnapshot(machineID, scanRoot string, results []RepoSnapshot, started time.Time, redactPaths bool) MachineSnapshot {
 	repos := make([]RepoSnapshot, 0, len(results))
 	dirty := 0
 	errs := 0
 	for _, r := range results {
-		repos = append(repos, RepoStatusToSnapshot(r, redactPaths))
+		repos = append(repos, maybeRedactRepoSnapshot(r, redactPaths))
 		if r.Error != "" {
 			errs++
 		} else if r.IsDirty {

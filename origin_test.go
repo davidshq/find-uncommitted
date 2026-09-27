@@ -78,18 +78,14 @@ func TestRepoCorrelationKey(t *testing.T) {
 	}
 }
 
-func TestRepoStatusToSnapshotIncludesOrigin(t *testing.T) {
-	status := RepoStatus{
+func TestMaybeRedactRepoSnapshotRedactsOrigin(t *testing.T) {
+	status := RepoSnapshot{
 		Path:    "/code/app",
 		Origin:  "github.com/acme/app",
 		Branch:  "main",
 		IsClean: true,
 	}
-	snap := RepoStatusToSnapshot(status, false)
-	if snap.Origin != status.Origin {
-		t.Fatalf("origin not copied: %q", snap.Origin)
-	}
-	redacted := RepoStatusToSnapshot(status, true)
+	redacted := maybeRedactRepoSnapshot(status, true)
 	if redacted.Origin == status.Origin || redacted.Origin == "" {
 		t.Fatalf("expected hashed origin when redacting, got %q", redacted.Origin)
 	}

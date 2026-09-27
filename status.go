@@ -19,11 +19,6 @@ func snapshotNeedsAttention(repo RepoSnapshot) bool {
 	return needsAttention(repo.Error, repo.IsEmpty, repo.IsDirty, repo.HasUnpushed, repo.HasBehind, repo.HasUntrackedUpstream)
 }
 
-// repoNeedsAttention is the live-scan equivalent of snapshotNeedsAttention.
-func repoNeedsAttention(status RepoStatus) bool {
-	return needsAttention(status.Error, status.IsEmpty, status.IsDirty, status.HasUnpushed, status.HasBehind, status.HasUntrackedUpstream)
-}
-
 // snapshotChangesText lists change tags for a repository snapshot.
 func snapshotChangesText(repo RepoSnapshot) []string {
 	var changes []string

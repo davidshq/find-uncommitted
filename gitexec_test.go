@@ -135,7 +135,7 @@ func TestIsGitContextErrWaitDelay(t *testing.T) {
 }
 
 func TestSetGitCancelledWaitDelayNotInvalidRepo(t *testing.T) {
-	st := RepoStatus{}
+	st := RepoSnapshot{}
 	if !setGitCancelled(context.Background(), &st, exec.ErrWaitDelay) {
 		t.Fatal("expected WaitDelay to be classified as timeout")
 	}
@@ -187,12 +187,32 @@ func TestCheckRepoStatusesStopsSchedulingOnCancel(t *testing.T) {
 	}
 }
 
-func TestDefaultAgentTickTimeoutString(t *testing.T) {
-	if DefaultAgentTickTimeout != 2*time.Minute {
-		t.Fatalf("DefaultAgentTickTimeout = %s, want 2m", DefaultAgentTickTimeout)
+func TestDefaultDurationStringsMatchTypedDefaults(t *testing.T) {
+	// Pin product defaults here so renaming a string const can't silently change behavior.
+	cases := []struct {
+		name string
+		str  string
+		got  time.Duration
+		want time.Duration
+	}{
+		{"interval", DefaultIntervalString, DefaultAgentInterval, 2 * time.Minute},
+		{"heartbeat", DefaultHeartbeatString, DefaultHeartbeat, 15 * time.Minute},
+		{"stale-ttl", DefaultStaleTTLString, DefaultStaleTTL, 30 * time.Minute},
+		{"tick-timeout", DefaultTickTimeoutString, DefaultAgentTickTimeout, 2 * time.Minute},
+		{"git-command", DefaultGitCommandTimeoutString, DefaultGitCommandTimeout, 30 * time.Second},
 	}
-	if DefaultTickTimeoutString != "2m" {
-		t.Fatalf("DefaultTickTimeoutString = %q, want 2m", DefaultTickTimeoutString)
+	for _, tc := range cases {
+		parsed, err := time.ParseDuration(tc.str)
+		if err != nil {
+			t.Errorf("%s string %q: %v", tc.name, tc.str, err)
+			continue
+		}
+		if parsed != tc.want {
+			t.Errorf("%s string = %q (→ %s), want %s", tc.name, tc.str, parsed, tc.want)
+		}
+		if tc.got != tc.want {
+			t.Errorf("%s duration = %s, want %s", tc.name, tc.got, tc.want)
+		}
 	}
 }
 

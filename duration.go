@@ -5,6 +5,43 @@ import (
 	"time"
 )
 
+// Duration defaults are defined once as Go duration strings; typed values are
+// derived so flags, sticky config, and runtime cannot drift.
+
+const (
+	DefaultIntervalString          = "2m"
+	DefaultHeartbeatString         = "15m"
+	DefaultStaleTTLString          = "30m"
+	DefaultTickTimeoutString       = "2m"
+	DefaultGitCommandTimeoutString = "30s"
+)
+
+var (
+	// DefaultAgentInterval is the default check cadence (scan + publish decision).
+	DefaultAgentInterval = mustDuration(DefaultIntervalString)
+
+	// DefaultHeartbeat is the liveness commit interval when snapshot content is unchanged.
+	DefaultHeartbeat = mustDuration(DefaultHeartbeatString)
+
+	// DefaultStaleTTL marks remote snapshots stale when older than this.
+	// Kept at roughly 2× DefaultHeartbeat so a quiet healthy agent is not marked stale.
+	DefaultStaleTTL = mustDuration(DefaultStaleTTLString)
+
+	// DefaultAgentTickTimeout bounds one agent publish tick (pull + scan + publish).
+	DefaultAgentTickTimeout = mustDuration(DefaultTickTimeoutString)
+
+	// DefaultGitCommandTimeout bounds a single git subprocess.
+	DefaultGitCommandTimeout = mustDuration(DefaultGitCommandTimeoutString)
+)
+
+func mustDuration(s string) time.Duration {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		panic("invalid default duration " + s + ": " + err.Error())
+	}
+	return d
+}
+
 func parseDurationFlag(name, value string) (time.Duration, error) {
 	d, err := time.ParseDuration(value)
 	if err != nil {

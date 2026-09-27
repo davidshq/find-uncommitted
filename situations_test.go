@@ -294,8 +294,8 @@ func TestGroupRowsByProject(t *testing.T) {
 	}
 }
 
-func TestRepoStatusToSnapshotIncludesBehindAndSHA(t *testing.T) {
-	status := RepoStatus{
+func TestMaybeRedactRepoSnapshotPreservesBehindAndSHA(t *testing.T) {
+	in := RepoSnapshot{
 		Path:        "/code/app",
 		Origin:      "github.com/acme/app",
 		Branch:      "main",
@@ -306,9 +306,9 @@ func TestRepoStatusToSnapshotIncludesBehindAndSHA(t *testing.T) {
 		HeadSHA:     "abc1234",
 		IsClean:     false,
 	}
-	snap := RepoStatusToSnapshot(status, false)
+	snap := maybeRedactRepoSnapshot(in, true)
 	if !snap.HasBehind || snap.BehindCount != 4 || snap.AheadCount != 1 || snap.HeadSHA != "abc1234" {
-		t.Fatalf("snapshot missing behind/SHA fields: %+v", snap)
+		t.Fatalf("redaction must keep behind/SHA fields: %+v", snap)
 	}
 }
 
@@ -316,7 +316,7 @@ func TestSnapshotNeedsAttentionIncludesBehind(t *testing.T) {
 	if !snapshotNeedsAttention(RepoSnapshot{HasBehind: true, BehindCount: 1}) {
 		t.Fatal("behind should need attention")
 	}
-	if !repoNeedsAttention(RepoStatus{HasBehind: true}) {
+	if !snapshotNeedsAttention(RepoSnapshot{HasBehind: true}) {
 		t.Fatal("behind should need attention")
 	}
 }
@@ -333,7 +333,7 @@ func TestOldSnapshotWithoutBehindLoadsClean(t *testing.T) {
 }
 
 func TestDetectLocalSituationsUsesMachineID(t *testing.T) {
-	got := DetectLocalSituations("my-laptop", []RepoStatus{
+	got := DetectLocalSituations("my-laptop", []RepoSnapshot{
 		{Path: "/a", Branch: "main", IsDirty: true, HasUnstaged: true},
 	})
 	if len(got) == 0 || got[0].Machines[0] != "my-laptop" {

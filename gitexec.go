@@ -13,14 +13,8 @@ import (
 // DefaultMaxWorkers caps parallel repo status checks to reduce git/disk contention.
 const DefaultMaxWorkers = 8
 
-// DefaultGitCommandTimeout bounds a single git subprocess.
-const DefaultGitCommandTimeout = 30 * time.Second
-
 // maxGitErrorDetailLen caps stderr included in user-facing repo errors.
 const maxGitErrorDetailLen = 200
-
-// DefaultAgentTickTimeout bounds one agent publish tick (pull + scan + publish).
-const DefaultAgentTickTimeout = 2 * time.Minute
 
 // runGit executes git under ctx with a per-command deadline, no TTY credential
 // prompts, and cancelled subprocesses when the deadline expires.

@@ -17,7 +17,7 @@ type SyncConfig struct {
 	RetryDelay   time.Duration
 	// Heartbeat forces a commit when status is unchanged but the last
 	// published UpdatedAt is older than this, so remote views stay fresh.
-	// Zero means DefaultHeartbeat (15m). Sticky config key: heartbeat.
+	// Zero means DefaultHeartbeat. Sticky config key: heartbeat.
 	Heartbeat time.Duration
 	Runner    GitRunner
 }
@@ -42,9 +42,6 @@ func (c SyncConfig) delay() time.Duration {
 	}
 	return c.RetryDelay
 }
-
-// DefaultHeartbeat is the liveness commit interval when snapshot content is unchanged.
-const DefaultHeartbeat = 15 * time.Minute
 
 func (c SyncConfig) heartbeat() time.Duration {
 	if c.Heartbeat <= 0 {

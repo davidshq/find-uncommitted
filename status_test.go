@@ -123,51 +123,22 @@ func TestRepoStatusText(t *testing.T) {
 	}
 }
 
-func TestNeedsAttentionEquivalent(t *testing.T) {
+func TestSnapshotNeedsAttention(t *testing.T) {
 	cases := []struct {
-		name   string
-		status RepoStatus
-		snap   RepoSnapshot
-		want   bool
+		name string
+		repo RepoSnapshot
+		want bool
 	}{
-		{
-			name:   "clean",
-			status: RepoStatus{IsClean: true},
-			snap:   RepoSnapshot{IsClean: true},
-			want:   false,
-		},
-		{
-			name:   "dirty",
-			status: RepoStatus{IsDirty: true},
-			snap:   RepoSnapshot{IsDirty: true},
-			want:   true,
-		},
-		{
-			name:   "behind",
-			status: RepoStatus{HasBehind: true},
-			snap:   RepoSnapshot{HasBehind: true, BehindCount: 1},
-			want:   true,
-		},
-		{
-			name:   "error",
-			status: RepoStatus{Error: "boom"},
-			snap:   RepoSnapshot{Error: "boom"},
-			want:   true,
-		},
-		{
-			name:   "empty",
-			status: RepoStatus{IsEmpty: true},
-			snap:   RepoSnapshot{IsEmpty: true},
-			want:   false,
-		},
+		{name: "clean", repo: RepoSnapshot{IsClean: true}, want: false},
+		{name: "dirty", repo: RepoSnapshot{IsDirty: true}, want: true},
+		{name: "behind", repo: RepoSnapshot{HasBehind: true, BehindCount: 1}, want: true},
+		{name: "error", repo: RepoSnapshot{Error: "boom"}, want: true},
+		{name: "empty", repo: RepoSnapshot{IsEmpty: true}, want: false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := repoNeedsAttention(tc.status); got != tc.want {
-				t.Fatalf("repoNeedsAttention = %v, want %v", got, tc.want)
-			}
-			if got := snapshotNeedsAttention(tc.snap); got != tc.want {
+			if got := snapshotNeedsAttention(tc.repo); got != tc.want {
 				t.Fatalf("snapshotNeedsAttention = %v, want %v", got, tc.want)
 			}
 		})

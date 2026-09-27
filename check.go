@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -77,7 +76,7 @@ func runCheckMode(ctx context.Context, path, machineID, stateRepo string, skipRe
 	}
 
 	status := checkRepoStatus(ctx, top)
-	localResults := []RepoStatus{status}
+	localResults := []RepoSnapshot{status}
 
 	var remote []LoadedSnapshot
 	if stateRepo != "" && !skipRemote {
@@ -92,20 +91,7 @@ func runCheckMode(ctx context.Context, path, machineID, stateRepo string, skipRe
 			}
 			return exitCheckError
 		}
-		if err := PullStateRepoReadOnly(ctx, SyncConfig{StateRepoDir: stateRepo, MachineID: machineID}); err != nil {
-			if errors.Is(err, ErrStateRepoBusy) {
-				fmt.Fprintln(os.Stderr, "warning: agent is syncing state repo; using on-disk snapshots")
-			} else {
-				fmt.Fprintf(os.Stderr, "warning: %v\n", err)
-			}
-		}
-		remote, err = LoadAllMachineSnapshots(stateRepo, staleTTL, time.Now().UTC())
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed loading remote snapshots: %v\n", err)
-			remote = nil
-		} else {
-			warnCorruptSnapshots(remote)
-		}
+		remote, _ = loadRemoteSnapshots(ctx, stateRepo, machineID, staleTTL)
 	}
 
 	var situations []Situation
@@ -113,7 +99,7 @@ func runCheckMode(ctx context.Context, path, machineID, stateRepo string, skipRe
 
 	if len(remote) > 0 {
 		rows := BuildAggregateRows(machineID, localResults, remote)
-		key := repoCorrelationKey(RepoStatusToSnapshot(status, false))
+		key := repoCorrelationKey(status)
 		projectRows = FilterRowsByProjectKeys(rows, map[string]bool{key: true})
 		situations = DetectSituations(projectRows)
 	} else {
@@ -121,7 +107,7 @@ func runCheckMode(ctx context.Context, path, machineID, stateRepo string, skipRe
 		projectRows = []AggregateRow{{
 			Machine: machineID,
 			Local:   true,
-			Repo:    RepoStatusToSnapshot(status, false),
+			Repo:    status,
 		}}
 	}
 
@@ -142,14 +128,14 @@ func runCheckMode(ctx context.Context, path, machineID, stateRepo string, skipRe
 	return exitCheckOK
 }
 
-func projectLabelForCheck(rows []AggregateRow, status RepoStatus) string {
+func projectLabelForCheck(rows []AggregateRow, status RepoSnapshot) string {
 	for _, row := range rows {
 		if row.LoadError != "" {
 			continue
 		}
 		return projectLabel(row.Repo)
 	}
-	return projectLabel(RepoStatusToSnapshot(status, false))
+	return projectLabel(status)
 }
 
 // orderCheckRows returns a copy with local machine(s) first, then by machine id.

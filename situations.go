@@ -477,7 +477,7 @@ func DisplayAttention(situations []Situation) {
 }
 
 // DetectLocalSituations builds Attention cues from a local-only scan (no state bus).
-func DetectLocalSituations(machineID string, results []RepoStatus) []Situation {
+func DetectLocalSituations(machineID string, results []RepoSnapshot) []Situation {
 	if machineID == "" {
 		machineID = "local"
 	}
@@ -486,7 +486,7 @@ func DetectLocalSituations(machineID string, results []RepoStatus) []Situation {
 		rows = append(rows, AggregateRow{
 			Machine: machineID,
 			Local:   true,
-			Repo:    RepoStatusToSnapshot(status, false),
+			Repo:    status,
 		})
 	}
 	return DetectSituations(rows)

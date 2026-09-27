@@ -23,6 +23,7 @@ type CheckJSONResult struct {
 }
 
 // CheckJSONMachine is one project × machine cell for clients.
+// Repo evidence fields mirror RepoSnapshot (separate omitempty for compact --json).
 type CheckJSONMachine struct {
 	ID                   string `json:"id"`
 	Local                bool   `json:"local"`

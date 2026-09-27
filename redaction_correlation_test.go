@@ -10,8 +10,8 @@ import (
 // publishing plain origins. Comparing a plain URL against a hash never matched,
 // which silently split one project into two unrelated groups.
 func TestRedactedOriginCorrelatesWithPlainOrigin(t *testing.T) {
-	plain := RepoStatusToSnapshot(RepoStatus{Path: "/laptop/app", Origin: "github.com/acme/app"}, false)
-	redacted := RepoStatusToSnapshot(RepoStatus{Path: "/desktop/app", Origin: "github.com/acme/app"}, true)
+	plain := RepoSnapshot{Path: "/laptop/app", Origin: "github.com/acme/app"}
+	redacted := maybeRedactRepoSnapshot(RepoSnapshot{Path: "/desktop/app", Origin: "github.com/acme/app"}, true)
 
 	if got, want := repoCorrelationKey(redacted), repoCorrelationKey(plain); got != want {
 		t.Fatalf("redacted key %q != plain key %q", got, want)
@@ -26,8 +26,8 @@ func TestRedactedOriginCorrelatesWithPlainOrigin(t *testing.T) {
 
 // Different projects must not collide just because both sides are hashed.
 func TestRedactedOriginKeepsDistinctProjectsApart(t *testing.T) {
-	a := RepoStatusToSnapshot(RepoStatus{Path: "/m/app", Origin: "github.com/acme/app"}, true)
-	b := RepoStatusToSnapshot(RepoStatus{Path: "/m/other", Origin: "github.com/acme/other"}, true)
+	a := maybeRedactRepoSnapshot(RepoSnapshot{Path: "/m/app", Origin: "github.com/acme/app"}, true)
+	b := maybeRedactRepoSnapshot(RepoSnapshot{Path: "/m/other", Origin: "github.com/acme/other"}, true)
 	if repoCorrelationKey(a) == repoCorrelationKey(b) {
 		t.Fatal("distinct origins must not share a correlation key")
 	}
@@ -36,13 +36,13 @@ func TestRedactedOriginKeepsDistinctProjectsApart(t *testing.T) {
 // End-to-end: a redacting remote and a plain local land in one group, and the
 // group adopts the legible label rather than the bare hash.
 func TestAggregateGroupsRedactedRemoteWithPlainLocal(t *testing.T) {
-	local := []RepoStatus{{Path: "/laptop/app", Origin: "github.com/acme/app", Branch: "main", IsClean: true}}
+	local := []RepoSnapshot{{Path: "/laptop/app", Origin: "github.com/acme/app", Branch: "main", IsClean: true}}
 	remote := []LoadedSnapshot{{
 		Snapshot: MachineSnapshot{
 			MachineID: "desktop",
 			UpdatedAt: time.Now().UTC(),
 			Repos: []RepoSnapshot{
-				RepoStatusToSnapshot(RepoStatus{
+				maybeRedactRepoSnapshot(RepoSnapshot{
 					Path: "/desktop/app", Origin: "github.com/acme/app",
 					Branch: "main", IsDirty: true, HasUnstaged: true,
 				}, true),

@@ -49,7 +49,7 @@ func invalidRepositoryError(stderr string, err error) string {
 	return "Not a valid git repository: " + detail
 }
 
-func appendRepoCheckError(status *RepoStatus, stderr string, err error, primary, followUp string) {
+func appendRepoCheckError(status *RepoSnapshot, stderr string, err error, primary, followUp string) {
 	label := primary
 	if status.Error != "" {
 		label = followUp

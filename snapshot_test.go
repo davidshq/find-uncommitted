@@ -194,7 +194,7 @@ func TestBuildAggregateRowsPreservesLoadError(t *testing.T) {
 }
 
 func TestBuildAggregateRowsSkipsLocalDuplicate(t *testing.T) {
-	local := []RepoStatus{{Path: "/local/a", Branch: "main", IsDirty: true, HasUnstaged: true}}
+	local := []RepoSnapshot{{Path: "/local/a", Branch: "main", IsDirty: true, HasUnstaged: true}}
 	remote := []LoadedSnapshot{
 		{
 			Snapshot: MachineSnapshot{
@@ -231,7 +231,7 @@ func TestBuildAggregateRowsSkipsLocalDuplicate(t *testing.T) {
 }
 
 func TestBuildAggregateRowsSortsByOrigin(t *testing.T) {
-	local := []RepoStatus{
+	local := []RepoSnapshot{
 		{Path: "/laptop/other", Origin: "github.com/acme/other", Branch: "main", IsClean: true},
 		{Path: "/laptop/app", Origin: "github.com/acme/app", Branch: "feat", IsDirty: true, HasUnstaged: true},
 	}
@@ -294,8 +294,8 @@ func TestSnapshotContentEqualIgnoresTimestamps(t *testing.T) {
 }
 
 func TestRedactPaths(t *testing.T) {
-	status := RepoStatus{Path: filepath.Join("C:", "Users", "me", "proj"), Branch: "main", IsClean: true}
-	snap := RepoStatusToSnapshot(status, true)
+	status := RepoSnapshot{Path: filepath.Join("C:", "Users", "me", "proj"), Branch: "main", IsClean: true}
+	snap := maybeRedactRepoSnapshot(status, true)
 	if snap.Path == status.Path {
 		t.Fatalf("expected redacted path, got %q", snap.Path)
 	}

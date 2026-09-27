@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -11,31 +10,9 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"time"
 
 	"find-uncommitted/internal/discover"
 )
-
-// RepoStatus is the live scan result for one local git repository.
-// Ahead/behind counts use already-known upstream tracking refs (no fetch).
-type RepoStatus struct {
-	Path                 string
-	Origin               string // normalized remote.origin.url; empty if none
-	HasUnstaged          bool
-	HasStaged            bool
-	HasUntracked         bool
-	HasUnpushed          bool
-	HasBehind            bool
-	HasUntrackedUpstream bool
-	AheadCount           int    // commits ahead of upstream (0 if none/unknown)
-	BehindCount          int    // commits behind upstream (0 if none/unknown)
-	HeadSHA              string // short HEAD SHA for cross-machine tip comparison
-	Branch               string
-	IsDirty              bool
-	IsClean              bool
-	IsEmpty              bool // git init with no commits yet
-	Error                string
-}
 
 var debugMode bool
 var dirtyOnly bool
@@ -72,10 +49,10 @@ func main() {
 	flag.StringVar(&outputFile, "output", "", "Save results to CSV file (e.g., --output results.csv)")
 	flag.StringVar(&stateRepo, "state-repo", "", "Local path to private Git state repository for cross-machine sync")
 	flag.BoolVar(&agentMode, "agent", false, "Run as background agent publishing machine snapshots")
-	flag.StringVar(&intervalStr, "interval", DefaultIntervalString, "Agent check interval (default 2m)")
-	flag.StringVar(&heartbeatStr, "heartbeat", DefaultHeartbeatString, "Agent liveness commit interval when status unchanged (default 15m)")
-	flag.StringVar(&staleTTLStr, "stale-ttl", DefaultStaleTTLString, "Mark machine snapshots stale after this duration (default 30m)")
-	flag.StringVar(&tickTimeoutStr, "tick-timeout", DefaultTickTimeoutString, "Agent per-tick deadline for pull, scan, and publish (default 2m)")
+	flag.StringVar(&intervalStr, "interval", DefaultIntervalString, fmt.Sprintf("Agent check interval (default %s)", DefaultIntervalString))
+	flag.StringVar(&heartbeatStr, "heartbeat", DefaultHeartbeatString, fmt.Sprintf("Agent liveness commit interval when status unchanged (default %s)", DefaultHeartbeatString))
+	flag.StringVar(&staleTTLStr, "stale-ttl", DefaultStaleTTLString, fmt.Sprintf("Mark machine snapshots stale after this duration (default %s)", DefaultStaleTTLString))
+	flag.StringVar(&tickTimeoutStr, "tick-timeout", DefaultTickTimeoutString, fmt.Sprintf("Agent per-tick deadline for pull, scan, and publish (default %s)", DefaultTickTimeoutString))
 	flag.StringVar(&machineID, "machine-id", "", "Machine identifier (default: hostname)")
 	flag.BoolVar(&installSched, "install-scheduler", false, "Install OS scheduler to run the agent at login")
 	flag.BoolVar(&uninstallSched, "uninstall-scheduler", false, "Remove OS scheduler registration")
@@ -328,21 +305,8 @@ func main() {
 			fmt.Fprintln(os.Stderr, "Fix state_repo in sticky config / env / --state-repo, or pass --no-remote for a local-only scan.")
 			os.Exit(1)
 		}
-		if err := PullStateRepoReadOnly(scanCtx, SyncConfig{StateRepoDir: stateRepo, MachineID: machineID}); err != nil {
-			if errors.Is(err, ErrStateRepoBusy) {
-				fmt.Fprintln(os.Stderr, "warning: agent is syncing state repo; using on-disk snapshots")
-			} else {
-				fmt.Fprintf(os.Stderr, "warning: %v\n", err)
-			}
-		}
 		// Try on-disk snapshots even when pull fails.
-		remote, err = LoadAllMachineSnapshots(stateRepo, staleTTL, time.Now().UTC())
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed loading remote snapshots: %v\n", err)
-		} else {
-			warnCorruptSnapshots(remote)
-			remoteOK = true
-		}
+		remote, remoteOK = loadRemoteSnapshots(scanCtx, stateRepo, machineID, staleTTL)
 	}
 
 	if len(results) == 0 && len(remote) == 0 {
@@ -441,7 +405,6 @@ func validateStateRepo(dir string) error {
 	return nil
 }
 
-
 func findGitRepos(rootDir string, excludeRepos ...string) []string {
 	return findGitReposContext(context.Background(), rootDir, excludeRepos...)
 }
@@ -458,7 +421,7 @@ func gitCancelledError(err error) string {
 	return fmt.Sprintf("git timed out or cancelled: %v", err)
 }
 
-func setGitCancelled(ctx context.Context, status *RepoStatus, err error) bool {
+func setGitCancelled(ctx context.Context, status *RepoSnapshot, err error) bool {
 	if isGitContextErr(ctx, err) {
 		status.Error = gitCancelledError(err)
 		return true
@@ -466,8 +429,22 @@ func setGitCancelled(ctx context.Context, status *RepoStatus, err error) bool {
 	return false
 }
 
-func checkRepoStatus(ctx context.Context, repoPath string) RepoStatus {
-	status := RepoStatus{
+// gitWorkingTreeNonempty runs a git command whose nonempty stdout means a working-tree signal.
+// ok is false when the status check should abort (cancel or hard error already recorded).
+func gitWorkingTreeNonempty(ctx context.Context, repoPath string, status *RepoSnapshot, failPrefix, shortMsg string, args ...string) (ok, nonempty bool) {
+	out, stderr, err := runGit(ctx, repoPath, args...)
+	if err != nil {
+		if setGitCancelled(ctx, status, err) {
+			return false, false
+		}
+		appendRepoCheckError(status, stderr, err, failPrefix, shortMsg)
+		return false, false
+	}
+	return true, len(strings.TrimSpace(out)) > 0
+}
+
+func checkRepoStatus(ctx context.Context, repoPath string) RepoSnapshot {
+	status := RepoSnapshot{
 		Path: repoPath,
 	}
 
@@ -523,38 +500,23 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoStatus {
 	// Capture normalized origin for cross-machine project correlation.
 	status.Origin = repoOriginURL(ctx, repoPath)
 
-	// Check for unstaged changes
-	unstaged, stderr, err := runGit(ctx, repoPath, "diff", "--name-only")
-	if err != nil {
-		if setGitCancelled(ctx, &status, err) {
-			return status
-		}
-		appendRepoCheckError(&status, stderr, err, "Failed to check unstaged changes", "unstaged check failed")
+	ok, nonempty := gitWorkingTreeNonempty(ctx, repoPath, &status, "Failed to check unstaged changes", "unstaged check failed", "diff", "--name-only")
+	if !ok {
 		return status
 	}
-	status.HasUnstaged = len(strings.TrimSpace(unstaged)) > 0
+	status.HasUnstaged = nonempty
 
-	// Check for staged changes
-	staged, stderr, err := runGit(ctx, repoPath, "diff", "--cached", "--name-only")
-	if err != nil {
-		if setGitCancelled(ctx, &status, err) {
-			return status
-		}
-		appendRepoCheckError(&status, stderr, err, "Failed to check staged changes", "staged check failed")
+	ok, nonempty = gitWorkingTreeNonempty(ctx, repoPath, &status, "Failed to check staged changes", "staged check failed", "diff", "--cached", "--name-only")
+	if !ok {
 		return status
 	}
-	status.HasStaged = len(strings.TrimSpace(staged)) > 0
+	status.HasStaged = nonempty
 
-	// Check for untracked files
-	untracked, stderr, err := runGit(ctx, repoPath, "ls-files", "--others", "--exclude-standard")
-	if err != nil {
-		if setGitCancelled(ctx, &status, err) {
-			return status
-		}
-		appendRepoCheckError(&status, stderr, err, "Failed to check untracked files", "untracked check failed")
+	ok, nonempty = gitWorkingTreeNonempty(ctx, repoPath, &status, "Failed to check untracked files", "untracked check failed", "ls-files", "--others", "--exclude-standard")
+	if !ok {
 		return status
 	}
-	status.HasUntracked = len(strings.TrimSpace(untracked)) > 0
+	status.HasUntracked = nonempty
 
 	if status.IsEmpty {
 		status.HeadSHA = ""

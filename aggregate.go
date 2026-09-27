@@ -20,13 +20,13 @@ type AggregateRow struct {
 }
 
 // BuildAggregateRows merges local scan results with remote machine snapshots.
-func BuildAggregateRows(localMachine string, localResults []RepoStatus, remote []LoadedSnapshot) []AggregateRow {
+func BuildAggregateRows(localMachine string, localResults []RepoSnapshot, remote []LoadedSnapshot) []AggregateRow {
 	var rows []AggregateRow
 	for _, status := range localResults {
 		rows = append(rows, AggregateRow{
 			Machine: localMachine,
 			Local:   true,
-			Repo:    RepoStatusToSnapshot(status, false),
+			Repo:    status,
 		})
 	}
 	for _, item := range remote {
@@ -135,7 +135,8 @@ func displayPath(wd, path string) string {
 	if rel == "." {
 		return "."
 	}
-	return rel
+	// Inventory paths use forward slashes on all platforms for stable display.
+	return filepath.ToSlash(rel)
 }
 
 func truncate(s string, max int) string {
