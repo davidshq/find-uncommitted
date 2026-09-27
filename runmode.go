@@ -7,6 +7,22 @@ import (
 	"time"
 )
 
+// argsHasAgentMode reports whether argv requests background agent mode.
+// Used to detach the Windows console before flag parsing so Task Scheduler
+// launches do not flash a terminal window.
+func argsHasAgentMode(args []string) bool {
+	for _, a := range args {
+		if a == "--agent" || a == "-agent" {
+			return true
+		}
+		// flag package accepts -agent=true / --agent=true forms too.
+		if strings.HasPrefix(a, "--agent=") || strings.HasPrefix(a, "-agent=") {
+			return true
+		}
+	}
+	return false
+}
+
 // requireStateRepo exits when no state repo is configured for agent/scheduler modes.
 func requireStateRepo(stateRepo, modeFlag string) {
 	if stateRepo != "" {

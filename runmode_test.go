@@ -31,6 +31,21 @@ func TestShouldPersistStableMachineID(t *testing.T) {
 	}
 }
 
+func TestArgsHasAgentMode(t *testing.T) {
+	if !argsHasAgentMode([]string{"--agent"}) {
+		t.Fatal("expected --agent")
+	}
+	if !argsHasAgentMode([]string{"--state-repo", "x", "--agent", "C:\\code"}) {
+		t.Fatal("expected --agent among flags")
+	}
+	if !argsHasAgentMode([]string{"--agent=true"}) {
+		t.Fatal("expected --agent=true")
+	}
+	if argsHasAgentMode([]string{"--install-scheduler", "C:\\code"}) {
+		t.Fatal("install-scheduler is not agent mode")
+	}
+}
+
 func TestNewAgentConfig(t *testing.T) {
 	cfg := newAgentConfig("/scan", "/state", "box", 2*time.Minute, 3*time.Minute, 8, true, 15*time.Minute, false)
 	if cfg.ScanRoot != "/scan" || cfg.StateRepoDir != "/state" || cfg.MachineID != "box" {

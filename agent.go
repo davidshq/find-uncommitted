@@ -200,7 +200,10 @@ func smokePublishOnce(cfg AgentConfig) (string, error) {
 // publishAgentSnapshot scans and publishes one machine snapshot.
 func publishAgentSnapshot(ctx context.Context, cfg AgentConfig) (MachineSnapshot, bool, error) {
 	started := time.Now()
-	repos := findGitRepos(cfg.ScanRoot, cfg.StateRepoDir)
+	repos := findGitReposContext(ctx, cfg.ScanRoot, cfg.StateRepoDir)
+	if err := ctx.Err(); err != nil {
+		return MachineSnapshot{}, false, fmt.Errorf("agent scan cancelled: %w", err)
+	}
 	results := checkRepoStatuses(ctx, repos, cfg.DirtyOnly, cfg.MaxWorkers)
 	if err := ctx.Err(); err != nil {
 		return MachineSnapshot{}, false, fmt.Errorf("agent scan cancelled: %w", err)
@@ -211,6 +214,8 @@ func publishAgentSnapshot(ctx context.Context, cfg AgentConfig) (MachineSnapshot
 }
 
 // checkRepoStatuses checks each repo path concurrently and optionally filters clean repos.
+// When ctx is cancelled, no further repos are scheduled so a timed-out agent tick
+// does not keep spawning git for the rest of a large scan root.
 func checkRepoStatuses(ctx context.Context, repos []string, dirtyOnlyFilter bool, maxWorkers int) []RepoStatus {
 	if len(repos) == 0 {
 		return nil
@@ -227,13 +232,23 @@ func checkRepoStatuses(ctx context.Context, repos []string, dirtyOnlyFilter bool
 		go func() {
 			defer wg.Done()
 			for repoPath := range jobs {
+				if ctx.Err() != nil {
+					// Skip without calling checkRepoStatus so cancelled ticks do not
+					// start more git processes for already-queued paths.
+					continue
+				}
 				statusChan <- checkRepoStatus(ctx, repoPath)
 			}
 		}()
 	}
 
+feed:
 	for _, repo := range repos {
-		jobs <- repo
+		select {
+		case <-ctx.Done():
+			break feed
+		case jobs <- repo:
+		}
 	}
 	close(jobs)
 

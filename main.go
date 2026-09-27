@@ -42,6 +42,12 @@ var dirtyOnly bool
 var outputFile string
 
 func main() {
+	// Detach as early as possible for Task Scheduler launches so a console
+	// window does not flash before flag parsing / config I/O.
+	if argsHasAgentMode(os.Args[1:]) {
+		detachAgentConsoleIfOwned()
+	}
+
 	var (
 		stateRepo      string
 		agentMode      bool
@@ -437,9 +443,14 @@ func validateStateRepo(dir string) error {
 
 
 func findGitRepos(rootDir string, excludeRepos ...string) []string {
+	return findGitReposContext(context.Background(), rootDir, excludeRepos...)
+}
+
+func findGitReposContext(ctx context.Context, rootDir string, excludeRepos ...string) []string {
 	return discover.FindGitRepos(rootDir, discover.WalkOptions{
 		Debug:    debugMode,
 		Excludes: excludeRepos,
+		Context:  ctx,
 	})
 }
 

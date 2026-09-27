@@ -1,6 +1,8 @@
 # Built executables live under binaries/ (keep the directory via .gitkeep)
 /binaries/*
 !/binaries/.gitkeep
+/binaries/find-uncommitted.exe
+/fix-ownership-tool/fix-ownership.exe
 
 # Legacy root-level binary names (in case of accidental local builds)
 /find-uncommitted

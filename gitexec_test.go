@@ -167,3 +167,40 @@ func TestRepoCheckWorkerCount(t *testing.T) {
 		t.Fatalf("workers capped to repo count = %d, want 5", got)
 	}
 }
+
+func TestCheckRepoStatusesStopsSchedulingOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	repos := make([]string, 64)
+	for i := range repos {
+		repos[i] = t.TempDir()
+	}
+	started := time.Now()
+	results := checkRepoStatuses(ctx, repos, false, 8)
+	elapsed := time.Since(started)
+	if elapsed > 2*time.Second {
+		t.Fatalf("cancelled pool took too long: %s", elapsed)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no results when cancelled before scheduling, got %d", len(results))
+	}
+}
+
+func TestDefaultAgentTickTimeoutString(t *testing.T) {
+	if DefaultAgentTickTimeout != 2*time.Minute {
+		t.Fatalf("DefaultAgentTickTimeout = %s, want 2m", DefaultAgentTickTimeout)
+	}
+	if DefaultTickTimeoutString != "2m" {
+		t.Fatalf("DefaultTickTimeoutString = %q, want 2m", DefaultTickTimeoutString)
+	}
+}
+
+func TestExecGitRunnerSkipsStartWhenContextDone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := ExecGitRunner{}.Run(ctx, t.TempDir(), "status")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled, got %v", err)
+	}
+}

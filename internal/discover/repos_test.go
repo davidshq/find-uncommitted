@@ -1,9 +1,11 @@
 package discover
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -101,5 +103,18 @@ func TestFindGitReposExcludeKeepsSiblings(t *testing.T) {
 	}
 	if !contains(repos, other) {
 		t.Errorf("expected sibling %q in %v", other, repos)
+	}
+}
+
+func TestFindGitReposStopsOnCancel(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 20; i++ {
+		gitInit(t, filepath.Join(root, "r"+strconv.Itoa(i)))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	repos := FindGitRepos(root, WalkOptions{Context: ctx})
+	if len(repos) != 0 {
+		t.Fatalf("expected no repos when cancelled before walk, got %d", len(repos))
 	}
 }

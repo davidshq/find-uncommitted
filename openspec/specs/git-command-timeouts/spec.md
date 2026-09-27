@@ -24,3 +24,19 @@ The system SHALL execute every git subprocess used for repository scanning and s
 #### Scenario: Credential prompt does not hang forever
 - **WHEN** git would otherwise wait for an interactive terminal credential prompt during a scan or sync
 - **THEN** the invocation does not block indefinitely waiting for TTY input
+
+#### Scenario: Cancelled scan stops scheduling further repos
+- **WHEN** the parent scan context is cancelled while repository status checks are in flight
+- **THEN** the worker pool does not schedule remaining unscanned repositories and does not start new git subprocesses for those paths
+
+#### Scenario: Windows cancel kills git process trees without a console flash
+- **WHEN** a git subprocess is cancelled on Windows and that process has child processes (for example a nested `git.exe`)
+- **THEN** the process tree is terminated so orphaned children do not accumulate across agent ticks, and helper kill tools (if any) are started without allocating a visible console window
+
+#### Scenario: Windows git subprocesses do not allocate a console
+- **WHEN** the tool runs a git subprocess on Windows (interactive or agent)
+- **THEN** the git process is created with no new console window (no terminal flash per git invocation)
+
+#### Scenario: Agent discovery respects tick cancel
+- **WHEN** the agent tick context is cancelled while repository discovery is still walking the scan root
+- **THEN** discovery stops walking and the tick fails as cancelled rather than continuing the walk unboundedly

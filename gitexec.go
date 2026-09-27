@@ -65,6 +65,11 @@ func (r ExecGitRunner) Run(ctx context.Context, dir string, args ...string) (str
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// Do not Start a process that would be cancelled immediately — avoids a
+	// spawn storm when a tick deadline has already fired.
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
 	cmdCtx, cancel := context.WithTimeout(ctx, r.commandTimeout())
 	defer cancel()
 

@@ -78,7 +78,7 @@ Use a **private** Git repository as a sync bus so each machine publishes its lat
 - Each repo entry includes a normalized **`origin`** URL (when configured) so the same project can be correlated across machines even when local paths differ; SSH and HTTPS remotes canonicalize to the same key
 - Aggregate rows sort by that identity (origin, or path basename for local-only repos) so copies of one project land together
 - Background `--agent` mode pulls, scans, writes, and push/rebases on a check interval (default **2m**)
-- Each agent tick has a **2m deadline**; every individual git subprocess has a **30s** deadline (`CommandContext`). Hung credential prompts or stuck git abort the tick with a warning instead of stalling forever while the process looks healthy
+- Each agent tick has a **2m deadline**; every individual git subprocess has a **30s** deadline (`CommandContext`). Hung credential prompts or stuck git abort the tick with a warning instead of stalling forever while the process looks healthy. On Windows, cancel kills the git **process tree** without flashing a console, and git itself is started with no window. Large scan roots that cannot finish within `2m` can raise `--tick-timeout` (for example `15m`) without changing the default
 - Agent git invocations set `GIT_TERMINAL_PROMPT=0` so interactive credential waits fail fast
 - Interactive scans load remotes when a state repo is resolved from `--state-repo`, `FIND_UNCOMMITTED_STATE_REPO`, or sticky TOML config (unless `--no-remote`)
 - Agent and interactive CLI coordinate on the state clone with a flock on `.find-uncommitted-sync.lock`; if the agent is publishing, the CLI skips `git pull` and uses on-disk snapshots
@@ -221,7 +221,7 @@ Useful flags:
 | `--interval` | Check interval: scan + publish decision (default `2m`) |
 | `--heartbeat` | Liveness commit when status unchanged (default `15m`) |
 | `--stale-ttl` | Staleness threshold (default `30m`; keep ≈ 2× `heartbeat`) |
-| `--tick-timeout` | Per-tick deadline for pull, scan, and publish (default `2m`) |
+| `--tick-timeout` | Per-tick deadline for pull, scan, and publish (default `2m`; raise for very large scan roots) |
 | `--max-workers` | Max parallel repo checks (default `8`) |
 | `--machine-id` | Override hostname-based machine id |
 | `--redact-paths` | Publish basename-only paths |

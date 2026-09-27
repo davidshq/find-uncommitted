@@ -1,6 +1,8 @@
 package discover
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +13,9 @@ import (
 type WalkOptions struct {
 	Debug    bool
 	Excludes []string
+	// Context, when set, aborts the walk early on cancel/deadline so large
+	// scan roots do not ignore agent tick timeouts during discovery.
+	Context context.Context
 }
 
 // FindGitRepos walks rootDir and returns paths to git repositories.
@@ -22,6 +27,11 @@ func FindGitRepos(rootDir string, opts WalkOptions) []string {
 	root := filepath.Clean(rootDir)
 
 	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+		if opts.Context != nil {
+			if cerr := opts.Context.Err(); cerr != nil {
+				return cerr
+			}
+		}
 		if err != nil {
 			if opts.Debug {
 				fmt.Printf("[DEBUG] Skipping (error accessing): %s\n", path)
@@ -75,7 +85,7 @@ func FindGitRepos(rootDir string, opts WalkOptions) []string {
 		return nil
 	})
 
-	if err != nil {
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		fmt.Printf("Error scanning directory: %v\n", err)
 	}
 

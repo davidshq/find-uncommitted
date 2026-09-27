@@ -49,6 +49,8 @@ There is **no** `--install-scheduler` flag today for “session only” vs “al
 .\binaries\find-uncommitted.exe --install-scheduler --state-repo D:\find-uncommitted-state C:\repos
 ```
 
+On Windows, creating/updating the **at-logon** task often requires an elevated prompt (`Access is denied` without it). Sticky config and smoke publish still run; re-run the elevated task registration if install stops at that step.
+
 What install does, in order:
 
 1. Writes sticky config (`config.toml`) with `state_repo`, `scan_root`, cadence knobs, and a stable `machine_id` if unset.
@@ -146,10 +148,11 @@ That disables/stops the unit and removes the unit file. Sticky config is left in
 Install creates:
 
 - Task name: `FindUncommittedAgent`
-- Trigger: **at logon** for the current user (`/SC ONLOGON`, limited rights)
+- Trigger: **at logon** for the current user (`LogonTrigger`, limited rights)
 - Action: `<absolute-path-to-exe> --agent` (no `.cmd` / VBS wrapper)
+- Settings: `MultipleInstancesPolicy=IgnoreNew` (so `schtasks /Run` is not stuck **Queued**), `ExecutionTimeLimit` disabled (agent may run indefinitely), task marked hidden
 
-At agent start on Windows, if this process is the only one on the console (typical for Task Scheduler), the agent **detaches that console** so no cmd window stays open. Running `--agent` yourself in an existing terminal keeps logging visible.
+At agent start on Windows, if this process is the only one on the console (typical for Task Scheduler), the agent **detaches that console** so no cmd window stays open. Interactive `--agent` in an existing terminal keeps logging visible. Git subprocesses and cancel helpers are created with no console window.
 
 Cadence (check interval / heartbeat) is owned by the agent loop inside the process, not by a repeating Task Scheduler trigger.
 
@@ -158,6 +161,23 @@ Cadence (check interval / heartbeat) is owned by the agent loop inside the proce
 Unlike Linux systemd, the Windows task does **not** auto-restart the process on crash; log out/in (or start the task again) if the agent exits.
 
 After upgrading the binary or moving it, re-run `--install-scheduler` so the task path is rewritten (and any legacy `agent-launcher.cmd` is removed).
+
+Install registers the task for **next logon**; it does not start the agent immediately. To start without logging off:
+
+```powershell
+schtasks /Run /TN FindUncommittedAgent
+# or
+Start-Process .\binaries\find-uncommitted.exe -ArgumentList "--agent" -WindowStyle Hidden
+```
+
+Confirm a single process (not a swarm of agents):
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='find-uncommitted.exe'" |
+  Select-Object ProcessId, CommandLine
+```
+
+A healthy tick may briefly show several `git` children (bounded by `max_workers`, default 8). Those should drain when the tick finishes or is cancelled; they must not keep climbing across ticks. On Windows, git and cancel helpers are started with no console window so the agent does not flash a terminal each tick.
 
 ### Verify
 
