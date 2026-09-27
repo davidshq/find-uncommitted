@@ -394,7 +394,7 @@ MIT — see [LICENSE](LICENSE).
 
 Compiled binaries are written to `binaries/` (gitignored). Create that directory if needed: `mkdir -p binaries`. After building, run via `./binaries/<name>` or put that directory on your `PATH` (usage examples below assume the tool is on `PATH` or invoked by name).
 
-CI (GitHub Actions) runs `go test ./...` on Ubuntu and Windows, then cross-compiles the main binary and ownership helper for linux/windows/darwin (amd64/arm64 where applicable).
+CI (GitHub Actions) runs `go test ./...` on Ubuntu and Windows, then cross-compiles the main binary and ownership helper for linux/windows/darwin (amd64/arm64 where applicable). Integration tests that create commits set a local `user.name` / `user.email` in the fixture repo so they pass on runners with no global Git identity.
 
 ### Install with Go
 

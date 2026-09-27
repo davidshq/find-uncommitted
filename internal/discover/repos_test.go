@@ -17,6 +17,15 @@ func gitInit(t *testing.T, dir string) {
 	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
 		t.Fatalf("git init %s: %v (%s)", dir, err, out)
 	}
+	// Local identity so commits work on CI runners with no global user.*.
+	for _, args := range [][]string{
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "test"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+	}
 }
 
 func contains(paths []string, want string) bool {

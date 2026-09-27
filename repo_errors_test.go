@@ -149,11 +149,16 @@ func TestRepoIsEmptyIntegration(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("hi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command("git", "-C", dir, "add", "readme.txt").CombinedOutput(); err != nil {
-		t.Fatalf("git add: %v (%s)", err, out)
-	}
-	if out, err := exec.Command("git", "-C", dir, "commit", "-m", "init").CombinedOutput(); err != nil {
-		t.Fatalf("git commit: %v (%s)", err, out)
+	// Local identity so commits work on CI runners with no global user.*.
+	for _, args := range [][]string{
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "test"},
+		{"add", "readme.txt"},
+		{"commit", "-m", "init"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
 	}
 	if repoIsEmpty(context.Background(), dir) {
 		t.Fatal("expected non-empty repo after commit")
