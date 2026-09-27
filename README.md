@@ -201,7 +201,7 @@ Exit codes (check mode only):
 | `2` | One or more Attention situations |
 | `1` | Usage error, not a git work tree, or invalid state repo when remotes are required |
 
-Suitable for a shell `cd` hook later: `find-uncommitted check "$PWD"` (install helpers are out of scope). Editor clients should prefer `find-uncommitted --json check <path>`.
+Shell `cd` hooks (bash/zsh + PowerShell) live in [`examples/cd-hook/`](examples/cd-hook/) with setup notes in [`docs/cd-hook.md`](docs/cd-hook.md). They print only on Attention (exit `2`). Editor clients should prefer `find-uncommitted --json check <path>`.
 
 ### Editor extension (VS Code / Cursor)
 
