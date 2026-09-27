@@ -85,7 +85,7 @@ Use a **private** Git repository as a sync bus so each machine publishes its lat
 - Agent and interactive CLI coordinate on the state clone with a flock on `.find-uncommitted-sync.lock`; if the agent is publishing, the CLI skips `git pull` and uses on-disk snapshots
 - On `install-scheduler`, a stable `machine_id` is generated and saved when none is configured (hostname + random suffix) so cloned VMs do not silently share an id
 - Snapshots older than `--stale-ttl` (default **30m**) are labeled **stale**
-- Unchanged status does not create commits every tick; a **heartbeat** commit (default **15m**, sticky `heartbeat`) refreshes `updated_at` so remote views stay fresh without chatty history. Content changes still publish on the check that detects them
+- Unchanged status does not create commits every tick; a **heartbeat** commit (default **15m**, sticky `heartbeat`) refreshes `updated_at` so remote views stay fresh without chatty history. Content changes still publish on the check that detects them. A failed commit after writing the snapshot restores the previous on-disk file so `updated_at` never claims a publish that did not land; a dirty machine snapshot still forces a commit even when the heartbeat would skip (orphan recovery).
 - Agent exits cleanly on Ctrl+C / SIGTERM (mid-tick git work is cancelled)
 
 ### Sticky config (recommended)

@@ -21,6 +21,21 @@ When published snapshot content is unchanged, the system SHALL commit and push a
 - **WHEN** a check tick detects snapshot content different from the last publish
 - **THEN** the system commits and pushes the new snapshot on that tick
 
+### Requirement: Atomic snapshot publish boundary
+On-disk `updated_at` is the freshness clock consumers trust. The system MUST NOT leave an advanced `updated_at` on the machine snapshot file unless that content has been successfully committed to the state repository. When a commit fails after writing the snapshot file, the system SHALL restore the previously published snapshot (or remove the file if none existed). When a commit succeeds but push fails, the system SHALL leave the committed snapshot in place so a later tick can push ahead commits. When snapshot content is unchanged and the heartbeat is not due, the system SHALL still commit if the machine snapshot path has uncommitted worktree changes (orphan recovery from a prior interrupted publish).
+
+#### Scenario: Commit failure restores prior snapshot
+- **WHEN** the publisher writes a new machine snapshot and `git commit` fails
+- **THEN** the on-disk snapshot is restored to the previously published content (including its prior `updated_at`)
+
+#### Scenario: Push failure keeps committed snapshot
+- **WHEN** the publisher successfully commits a machine snapshot but `git push` fails
+- **THEN** the committed snapshot remains on disk and local HEAD stays ahead for a later push retry
+
+#### Scenario: Dirty snapshot forces commit despite calm heartbeat
+- **WHEN** a check tick would otherwise skip (content unchanged and heartbeat not due) but the machine snapshot path is dirty in the worktree
+- **THEN** the system commits and pushes that snapshot on that tick
+
 ### Requirement: Automatic machine state publishing
 The system SHALL support an autonomous background mode that periodically scans local repositories on the configured check interval and publishes per the heartbeat policy without requiring manual command invocation. The default check interval when unset SHALL be `2m`. Agent mode SHALL be invocable only as the soft command `find-uncommitted [flags] agent [directory_to_scan]`. Scheduler install and uninstall SHALL be invocable only as soft commands `install-scheduler` and `uninstall-scheduler`. OS scheduler registration SHALL invoke the binary with soft command `agent` (not a mode flag).
 

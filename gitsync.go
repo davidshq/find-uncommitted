@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -118,30 +119,82 @@ func pullStateRepoReadOnlyLocked(ctx context.Context, cfg SyncConfig) error {
 // PublishLocalSnapshot writes/commits the machine file only when content changed
 // or a heartbeat publish is due. Skipping must not rewrite updated_at on disk,
 // or remote staleness detection breaks while the agent is still healthy.
-// When content is unchanged, still push if local commits are ahead of upstream
-// (e.g. previous tick committed but failed to push).
+//
+// The on-disk file is the freshness clock consumers trust. A write that advances
+// updated_at without a successful commit would make the next tick skip (content
+// equal + heartbeat not due) while pushIfAhead ignores a dirty worktree — remotes
+// stay stale. So: restore the previous snapshot if commit fails after write, and
+// force a commit when the snapshot path is already dirty (orphan recovery).
+// When content is unchanged and the worktree is clean, still push if local
+// commits are ahead of upstream (e.g. previous tick committed but failed to push).
 func PublishLocalSnapshot(ctx context.Context, cfg SyncConfig, snap MachineSnapshot) (published bool, err error) {
 	path := SnapshotFilePath(cfg.StateRepoDir, cfg.MachineID)
 	prev, readErr := ReadMachineSnapshot(path)
+	hadPrev := readErr == nil
 	needsCommit := true
-	if readErr == nil {
+	if hadPrev {
 		contentSame := SnapshotContentEqual(prev, snap)
 		heartbeatDue := time.Since(prev.UpdatedAt) >= cfg.heartbeat()
 		needsCommit = !contentSame || heartbeatDue
 	}
 
 	if !needsCommit {
-		pushed, err := pushIfAhead(ctx, cfg)
-		return pushed, err
+		dirty, dirtyErr := snapshotPathDirty(ctx, cfg, path)
+		if dirtyErr != nil {
+			return false, SyncWarning{
+				Message: "could not check snapshot worktree state",
+				Err:     dirtyErr,
+			}
+		}
+		if dirty {
+			// Prior write left an uncommitted snapshot; commit it this tick.
+			needsCommit = true
+		} else {
+			pushed, err := pushIfAhead(ctx, cfg)
+			return pushed, err
+		}
 	}
 
 	if err := WriteMachineSnapshot(path, snap); err != nil {
 		return false, err
 	}
-	if err := commitAndPush(ctx, cfg, path); err != nil {
+	if err := commitSnapshot(ctx, cfg, path); err != nil {
+		if restoreErr := restorePublishedSnapshot(path, prev, hadPrev); restoreErr != nil {
+			return false, fmt.Errorf("%w (also failed to restore snapshot: %v)", err, restoreErr)
+		}
+		return false, err
+	}
+	if err := rebaseAndPush(ctx, cfg); err != nil {
+		// Commit landed; leave the new file. Next tick's pushIfAhead retries.
 		return false, err
 	}
 	return true, nil
+}
+
+// snapshotPathDirty reports whether the machine snapshot has uncommitted changes.
+func snapshotPathDirty(ctx context.Context, cfg SyncConfig, absPath string) (bool, error) {
+	rel, err := filepath.Rel(cfg.StateRepoDir, absPath)
+	if err != nil {
+		rel = absPath
+	}
+	out, stderr, err := cfg.runner().Run(ctx, cfg.StateRepoDir, "status", "--porcelain", "--", rel)
+	if err != nil {
+		return false, fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr))
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
+// restorePublishedSnapshot puts the last successfully-read snapshot back on disk
+// after a failed commit so updated_at does not claim a publish that never landed.
+// When there was no prior file, remove the orphan write.
+func restorePublishedSnapshot(path string, prev MachineSnapshot, hadPrev bool) error {
+	if hadPrev {
+		return WriteMachineSnapshot(path, prev)
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func aheadOfUpstreamCount(ctx context.Context, cfg SyncConfig) (int, error) {
@@ -170,11 +223,20 @@ func pushIfAhead(ctx context.Context, cfg SyncConfig) (bool, error) {
 	return true, nil
 }
 
-func commitAndPush(ctx context.Context, cfg SyncConfig, relPath string) error {
+func commitAndPush(ctx context.Context, cfg SyncConfig, absPath string) error {
+	if err := commitSnapshot(ctx, cfg, absPath); err != nil {
+		return err
+	}
+	return rebaseAndPush(ctx, cfg)
+}
+
+// commitSnapshot stages and commits the machine snapshot file. A clean
+// "nothing to commit" race is treated as success (caller may still push).
+func commitSnapshot(ctx context.Context, cfg SyncConfig, absPath string) error {
 	r := cfg.runner()
-	addPath, err := filepath.Rel(cfg.StateRepoDir, relPath)
+	addPath, err := filepath.Rel(cfg.StateRepoDir, absPath)
 	if err != nil {
-		addPath = relPath
+		addPath = absPath
 	}
 
 	if _, stderr, err := r.Run(ctx, cfg.StateRepoDir, "add", "--", addPath); err != nil {
@@ -186,18 +248,16 @@ func commitAndPush(ctx context.Context, cfg SyncConfig, relPath string) error {
 
 	msg := fmt.Sprintf("update snapshot for %s", sanitizeMachineID(cfg.MachineID))
 	if _, stderr, err := r.Run(ctx, cfg.StateRepoDir, "commit", "-m", msg); err != nil {
-		// Nothing to commit is treated as success (race with equal content).
 		combined := strings.ToLower(stderr + err.Error())
 		if strings.Contains(combined, "nothing to commit") {
-			return rebaseAndPush(ctx, cfg)
+			return nil
 		}
 		return SyncWarning{
 			Message: "state repo commit failed",
 			Err:     fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr)),
 		}
 	}
-
-	return rebaseAndPush(ctx, cfg)
+	return nil
 }
 
 func rebaseAndPush(ctx context.Context, cfg SyncConfig) error {

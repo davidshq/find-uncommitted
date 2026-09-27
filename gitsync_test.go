@@ -101,6 +101,7 @@ func TestCommitAndPushRetriesThenSucceeds(t *testing.T) {
 func TestPublishSkipsCommitWhenUnchangedWithinHeartbeat(t *testing.T) {
 	dir := t.TempDir()
 	g := newScriptedGit()
+	g.enqueue("status", gitResult{stdout: ""})
 	g.enqueue("rev-list", gitResult{stdout: "0\n"})
 	cfg := SyncConfig{
 		StateRepoDir: dir,
@@ -128,8 +129,8 @@ func TestPublishSkipsCommitWhenUnchangedWithinHeartbeat(t *testing.T) {
 	if committed {
 		t.Fatal("expected no commit when content unchanged and heartbeat not due")
 	}
-	if len(g.calls) != 1 || g.calls[0][0] != "rev-list" {
-		t.Fatalf("expected ahead-check only, got %v", g.calls)
+	if len(g.calls) != 2 || g.calls[0][0] != "status" || g.calls[1][0] != "rev-list" {
+		t.Fatalf("expected dirty-check then ahead-check, got %v", g.calls)
 	}
 	// Disk timestamp must stay unchanged so heartbeat can still fire later.
 	got, err := ReadMachineSnapshot(path)
@@ -144,6 +145,7 @@ func TestPublishSkipsCommitWhenUnchangedWithinHeartbeat(t *testing.T) {
 func TestPublishPushesWhenAheadWithoutNewCommit(t *testing.T) {
 	dir := t.TempDir()
 	g := newScriptedGit()
+	g.enqueue("status", gitResult{stdout: ""})
 	g.enqueue("rev-list", gitResult{stdout: "1\n"})
 	g.enqueue("pull", gitResult{})
 	g.enqueue("push", gitResult{})
@@ -217,6 +219,157 @@ func TestPublishCommitsOnHeartbeat(t *testing.T) {
 	}
 	if !committed {
 		t.Fatal("expected commit due to heartbeat")
+	}
+}
+
+func TestPublishRestoresSnapshotWhenCommitFails(t *testing.T) {
+	dir := t.TempDir()
+	g := newScriptedGit()
+	g.enqueue("add", gitResult{})
+	g.enqueue("commit", gitResult{err: errors.New("exit 1"), stderr: "hook rejected"})
+
+	cfg := SyncConfig{
+		StateRepoDir: dir,
+		MachineID:    "box",
+		Heartbeat:    time.Hour,
+		RetryDelay:   time.Millisecond,
+		Runner:       g,
+	}
+	path := SnapshotFilePath(dir, "box")
+	publishedAt := time.Now().UTC().Add(-time.Minute)
+	prev := MachineSnapshot{
+		MachineID: "box",
+		UpdatedAt: publishedAt,
+		Repos:     []RepoSnapshot{{Path: "/a", Branch: "main", IsClean: true}},
+		Meta:      ScanMetadata{RepoCount: 1, ScanRoot: "/"},
+	}
+	if err := WriteMachineSnapshot(path, prev); err != nil {
+		t.Fatal(err)
+	}
+	next := prev
+	next.UpdatedAt = time.Now().UTC()
+	next.Repos = []RepoSnapshot{{Path: "/a", Branch: "main", IsClean: false, IsDirty: true, HasUnstaged: true}}
+
+	published, err := PublishLocalSnapshot(context.Background(), cfg, next)
+	if err == nil {
+		t.Fatal("expected commit failure")
+	}
+	if published {
+		t.Fatal("failed publish must not report success")
+	}
+	got, err := ReadMachineSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.UpdatedAt.Equal(publishedAt) {
+		t.Fatalf("failed commit left advanced updated_at: got %v want %v", got.UpdatedAt, publishedAt)
+	}
+	if !SnapshotContentEqual(got, prev) {
+		t.Fatalf("failed commit did not restore previous snapshot content: %+v", got)
+	}
+}
+
+func TestPublishCommitsDirtySnapshotWhenHeartbeatNotDue(t *testing.T) {
+	dir := t.TempDir()
+	g := newScriptedGit()
+	// Content equal + heartbeat not due would skip, but dirty worktree forces commit.
+	g.enqueue("status", gitResult{stdout: " M machines/box.json\n"})
+	g.enqueue("add", gitResult{})
+	g.enqueue("commit", gitResult{})
+	g.enqueue("pull", gitResult{})
+	g.enqueue("push", gitResult{})
+
+	cfg := SyncConfig{
+		StateRepoDir: dir,
+		MachineID:    "box",
+		Heartbeat:    time.Hour,
+		RetryDelay:   time.Millisecond,
+		Runner:       g,
+	}
+	path := SnapshotFilePath(dir, "box")
+	// Simulate orphan: disk already has a fresh updated_at from a prior failed publish.
+	orphanAt := time.Now().UTC().Add(-time.Minute)
+	snap := MachineSnapshot{
+		MachineID: "box",
+		UpdatedAt: orphanAt,
+		Repos:     []RepoSnapshot{{Path: "/a", Branch: "main", IsClean: true}},
+		Meta:      ScanMetadata{RepoCount: 1, ScanRoot: "/"},
+	}
+	if err := WriteMachineSnapshot(path, snap); err != nil {
+		t.Fatal(err)
+	}
+	next := snap
+	next.UpdatedAt = time.Now().UTC()
+
+	published, err := PublishLocalSnapshot(context.Background(), cfg, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !published {
+		t.Fatal("expected commit of dirty orphaned snapshot")
+	}
+	var sawCommit bool
+	for _, c := range g.calls {
+		if c[0] == "commit" {
+			sawCommit = true
+		}
+	}
+	if !sawCommit {
+		t.Fatalf("expected commit for dirty snapshot, calls=%v", g.calls)
+	}
+}
+
+func TestPublishLeavesCommittedSnapshotWhenPushFails(t *testing.T) {
+	dir := t.TempDir()
+	g := newScriptedGit()
+	g.enqueue("add", gitResult{})
+	g.enqueue("commit", gitResult{})
+	g.enqueue("pull", gitResult{})
+	g.enqueue("push", gitResult{err: errors.New("exit 1"), stderr: "network down"})
+	g.enqueue("pull", gitResult{})
+	g.enqueue("push", gitResult{err: errors.New("exit 1"), stderr: "network down"})
+	g.enqueue("pull", gitResult{})
+	g.enqueue("push", gitResult{err: errors.New("exit 1"), stderr: "network down"})
+
+	cfg := SyncConfig{
+		StateRepoDir: dir,
+		MachineID:    "box",
+		Heartbeat:    time.Hour,
+		MaxRetries:   3,
+		RetryDelay:   time.Millisecond,
+		Runner:       g,
+	}
+	path := SnapshotFilePath(dir, "box")
+	prev := MachineSnapshot{
+		MachineID: "box",
+		UpdatedAt: time.Now().UTC().Add(-time.Minute),
+		Repos:     []RepoSnapshot{{Path: "/a", Branch: "main", IsClean: true}},
+		Meta:      ScanMetadata{RepoCount: 1, ScanRoot: "/"},
+	}
+	if err := WriteMachineSnapshot(path, prev); err != nil {
+		t.Fatal(err)
+	}
+	next := prev
+	next.UpdatedAt = time.Now().UTC()
+	next.Repos = []RepoSnapshot{{Path: "/a", Branch: "feature", IsClean: true}}
+
+	published, err := PublishLocalSnapshot(context.Background(), cfg, next)
+	if err == nil {
+		t.Fatal("expected push failure")
+	}
+	if published {
+		t.Fatal("push failure must not report published")
+	}
+	got, err := ReadMachineSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Commit succeeded: keep the new snapshot so pushIfAhead can flush next tick.
+	if !got.UpdatedAt.Equal(next.UpdatedAt) {
+		t.Fatalf("push failure restored snapshot; want committed updated_at %v got %v", next.UpdatedAt, got.UpdatedAt)
+	}
+	if !SnapshotContentEqual(got, next) {
+		t.Fatalf("push failure should leave committed content: %+v", got)
 	}
 }
 
