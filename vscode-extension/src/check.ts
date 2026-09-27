@@ -168,7 +168,8 @@ export function parseResult(stdout: string): CheckJSONResult | undefined {
 
 /**
  * Map CLI exit + JSON to a folder outcome. Exit 1 for non-git is quiet skip.
- * Exit 2 counts as attention even when stdout is not valid JSON.
+ * Exit 2 is attention (including unparseable stdout), except parseable
+ * `local_error`-only results which map to error (`FU · error`).
  */
 export function outcomeFromRun(
   folder: string,
@@ -224,6 +225,25 @@ export function outcomeFromRun(
         folder,
         result: fallback,
         elevated: true,
+      };
+    }
+    // CLI encodes status-probe failures as exit 2 + local_error. That is not
+    // unfinished work — surface as error so the status bar shows FU · error.
+    const localErrors = (result.situations ?? []).filter(
+      (s) => s.kind === "local_error"
+    );
+    if (localErrors.length > 0 && !isElevated(result)) {
+      const nudge = localErrors.map((s) => s.nudge).filter(Boolean).join("; ");
+      return {
+        kind: "error",
+        folder,
+        message:
+          result.error ||
+          nudge ||
+          raw.stderr.trim() ||
+          "local git status error",
+        result,
+        stderr: raw.stderr.trim() || undefined,
       };
     }
     return {

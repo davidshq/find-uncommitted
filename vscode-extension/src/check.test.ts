@@ -107,6 +107,52 @@ describe("outcomeFromRun", () => {
     }
   });
 
+  it("maps exit 2 local_error JSON as error not dirty attention", () => {
+    const o = outcomeFromRun("/repo", {
+      exitCode: 2,
+      stdout: JSON.stringify({
+        schemaVersion: 1,
+        ok: false,
+        attention: true,
+        situations: [
+          {
+            kind: "local_error",
+            nudge: "fix local git error: Failed to check upstream tracking: unknown revision",
+          },
+        ],
+      }),
+      stderr: "",
+    });
+    assert.equal(o.kind, "error");
+    if (o.kind === "error") {
+      assert.match(o.message, /upstream|unknown revision|local git/i);
+    }
+  });
+
+  it("keeps exit 2 elevated when local_error mixes with cross-machine", () => {
+    const o = outcomeFromRun("/repo", {
+      exitCode: 2,
+      stdout: JSON.stringify({
+        schemaVersion: 1,
+        ok: false,
+        attention: true,
+        situations: [
+          { kind: "local_error", nudge: "probe failed" },
+          {
+            kind: "other_machine_work",
+            nudge: "unfinished on desktop",
+            machines: ["desktop"],
+          },
+        ],
+      }),
+      stderr: "",
+    });
+    assert.equal(o.kind, "attention");
+    if (o.kind === "attention") {
+      assert.equal(o.elevated, true);
+    }
+  });
+
   it("skips non-git exit 1 quietly", () => {
     const o = outcomeFromRun("/tmp/nogit", {
       exitCode: 1,

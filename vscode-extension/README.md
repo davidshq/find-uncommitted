@@ -15,6 +15,8 @@ Editors launched from a dock/menu often inherit a minimal `PATH`. If the status 
 
 ## Develop / install locally
 
+Requires **Node.js 22** (current LTS; CI uses the same). Node 20 is EOL and unsupported.
+
 ```bash
 cd vscode-extension
 npm install
@@ -25,7 +27,8 @@ npm test
 **Run Extension** from VS Code/Cursor (`F5` with this folder open), or package a VSIX:
 
 ```bash
-npm run package
+npm install          # installs pinned @vscode/vsce
+npm run package      # runs local vsce (no network fetch)
 # then: Install from VSIX… → find-uncommitted-0.1.0.vsix
 # Cursor: same “Install from VSIX” flow
 ```
@@ -73,7 +76,7 @@ Local-only dirty stays on the status bar. Switch to `"statusBar"` if you want th
 
 - **FU · ok** — quiet clear  
 - **FU · dirty** — local attention only  
-- **⚠ FU · error** — check/CLI failure (timeout, bad exit); not unfinished work  
+- **⚠ FU · error** — check/CLI failure (timeout, bad exit, or `local_error` from the CLI); not unfinished work  
 - **⚠ FU · \<machine\>** — elevated cross-machine attention  
 - **⚠ FU · setup** — binary missing  
 

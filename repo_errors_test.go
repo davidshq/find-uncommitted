@@ -10,6 +10,67 @@ import (
 	"testing"
 )
 
+func TestIsEmptyRepositoryMessage(t *testing.T) {
+	cases := []struct {
+		name   string
+		stderr string
+		want   bool
+	}{
+		{"no commits yet", "fatal: your current branch 'main' does not have any commits yet", true},
+		{"needed single revision", "fatal: Needed a single revision", true},
+		{"ambiguous HEAD", "fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree", true},
+		{"unknown revision alone", "fatal: ambiguous argument 'origin/main': unknown revision or path not in the working tree", false},
+		{"invalid reference alone", "fatal: invalid reference: refs/remotes/origin/gone", false},
+		{"deleted upstream shape", "fatal: no such ref: 'refs/remotes/origin/feature'", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isEmptyRepositoryMessage(tc.stderr, errors.New("exit status 128"))
+			if got != tc.want {
+				t.Fatalf("isEmptyRepositoryMessage(%q)=%v, want %v", tc.stderr, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDeletedUpstreamNotMarkedEmpty(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-b", "main", dir},
+		{"-C", dir, "config", "user.email", "test@example.com"},
+		{"-C", dir, "config", "user.name", "test"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"add", "readme.txt"},
+		{"commit", "-m", "init"},
+		{"remote", "add", "origin", "https://example.com/org/app.git"},
+		{"config", "branch.main.remote", "origin"},
+		{"config", "branch.main.merge", "refs/heads/main"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+	}
+
+	st := checkRepoStatus(context.Background(), dir)
+	if st.IsEmpty {
+		t.Fatalf("non-empty repo with missing upstream must not be IsEmpty: %+v", st)
+	}
+	if st.Error == "" && !st.HasUntrackedUpstream {
+		t.Fatalf("expected upstream error or untracked-upstream, got %+v", st)
+	}
+}
+
 func TestClassifyUpstreamFailure(t *testing.T) {
 	t.Run("no upstream", func(t *testing.T) {
 		untracked, errMsg := classifyUpstreamFailure("fatal: no upstream configured\n", errors.New("exit status 128"))

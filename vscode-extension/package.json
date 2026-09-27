@@ -73,12 +73,13 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test 'out/**/*.test.js'",
-    "package": "npx @vscode/vsce package --no-dependencies"
+    "test": "npm run compile && node --test \"./out/**/*.test.js\"",
+    "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
-    "@types/node": "^20.11.0",
+    "@types/node": "^22.10.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.6.0",
     "typescript": "^5.3.3"
   }
 }

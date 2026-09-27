@@ -1,6 +1,6 @@
 ## Why
 
-Cross-machine origin correlation and Attention situations already exist, but the habit moment is missing: before digging into one repo, there is no path-scoped pre-flight. Users must remember to run a full scan and hunt for the project. Shipping `check <path>` cashs that work into a rare, actionable nudge (scriptable for a later `cd` hook).
+Cross-machine origin correlation and Attention situations already exist, but the habit moment is missing: before digging into one repo, there is no path-scoped pre-flight. Users must remember to run a full scan and hunt for the project. Shipping `check <path>` cashes that work into a rare, actionable nudge (scriptable for a later `cd` hook).
 
 ## What Changes
 

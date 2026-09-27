@@ -607,15 +607,13 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoSnapshot {
 			if setGitCancelled(ctx, &status, upstreamErr) {
 				return status
 			}
-			if isEmptyRepositoryMessage(upStderr, upstreamErr) {
-				status.IsEmpty = true
-			} else {
-				untrackedUpstream, repoErr := classifyUpstreamFailure(upStderr, upstreamErr)
-				if repoErr != "" {
-					status.Error = repoErr
-				} else if untrackedUpstream {
-					status.HasUntrackedUpstream = true
-				}
+			// Empty-repo detection already ran via repoIsEmpty (HEAD). Do not
+			// reclassify upstream "unknown revision" (e.g. deleted @{u}) as empty.
+			untrackedUpstream, repoErr := classifyUpstreamFailure(upStderr, upstreamErr)
+			if repoErr != "" {
+				status.Error = repoErr
+			} else if untrackedUpstream {
+				status.HasUntrackedUpstream = true
 			}
 		} else {
 			// Ahead/behind against cached upstream refs only (no fetch).

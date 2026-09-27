@@ -25,12 +25,12 @@ During upstream tracking checks, the system SHALL classify only known-benign out
 - **THEN** the repository has untracked upstream set and no `Error` field
 
 #### Scenario: Empty repository
-- **WHEN** a repository has no commits yet and upstream resolution fails with messages such as `does not have any commits yet` or `no such branch` consistent with an unborn branch
+- **WHEN** a repository has no commits yet (verified via unborn HEAD / `rev-parse HEAD` failure with empty-repo messages such as `does not have any commits yet` or `needed a single revision`)
 - **THEN** the repository is marked as empty (not an error) and Attention does not emit a fix-local-git-error nudge for it
 
 #### Scenario: Unknown upstream fatal stays an error
-- **WHEN** upstream resolution fails with a fatal message that is neither no-upstream nor empty-repo
-- **THEN** the repository `Error` includes the stderr detail and Attention MAY include a fix-local-git-error nudge
+- **WHEN** upstream resolution fails with a fatal message that is neither no-upstream nor empty-repo (including generic `unknown revision` for a deleted upstream on a repo that already has commits)
+- **THEN** the repository `Error` includes the stderr detail and Attention MAY include a fix-local-git-error nudge; the repository MUST NOT be marked empty
 
 ### Requirement: Invalid repository errors include detail when available
 When initial repository validation (`git rev-parse --git-dir`) fails for reasons other than timeout/cancellation or dubious ownership, the system SHALL include git stderr detail when available instead of only a generic invalid-repository label.

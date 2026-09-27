@@ -8,17 +8,18 @@ import (
 	"github.com/davidshq/find-uncommitted/internal/gitexec"
 )
 
-// isEmptyRepositoryMessage reports whether git output indicates no commits yet.
+// isEmptyRepositoryMessage reports whether git output indicates an unborn HEAD
+// (no commits yet). It deliberately omits generic "unknown revision" /
+// "invalid reference" phrases — those also appear for deleted upstreams and
+// other real failures that must stay classified as errors.
 func isEmptyRepositoryMessage(stderr string, err error) bool {
 	combined := strings.ToLower(strings.TrimSpace(stderr))
 	if err != nil {
 		combined += " " + strings.ToLower(err.Error())
 	}
 	return strings.Contains(combined, "does not have any commits yet") ||
-		strings.Contains(combined, "unknown revision") ||
-		strings.Contains(combined, "invalid reference") ||
 		strings.Contains(combined, "needed a single revision") ||
-		strings.Contains(combined, "ambiguous argument") && strings.Contains(combined, "head")
+		(strings.Contains(combined, "ambiguous argument") && strings.Contains(combined, "head"))
 }
 
 // repoIsEmpty returns true when the repository has no commits yet.
