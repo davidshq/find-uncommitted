@@ -32,7 +32,7 @@ type RepoSnapshot struct {
 	HasUntrackedUpstream bool   `json:"has_untracked_upstream"`
 	AheadCount           int    `json:"ahead_count,omitempty"`  // commits ahead of upstream (0 if none/unknown)
 	BehindCount          int    `json:"behind_count,omitempty"` // commits behind upstream (0 if none/unknown)
-	HeadSHA              string `json:"head_sha,omitempty"`     // short HEAD SHA for cross-machine tip comparison
+	HeadSHA              string `json:"head_sha,omitempty"`     // fixed --short=12 HEAD SHA; compare via headSHAsEqual
 	IsDirty              bool   `json:"is_dirty"`
 	IsClean              bool   `json:"is_clean"`
 	IsEmpty              bool   `json:"is_empty,omitempty"` // git init with no commits yet

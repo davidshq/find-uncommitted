@@ -10,7 +10,7 @@ import (
 
 func TestStateRepoSyncLockBlocksSecondNonBlockingAcquire(t *testing.T) {
 	dir := t.TempDir()
-	first, err := acquireStateRepoSyncLockBlocking(dir)
+	first, err := acquireStateRepoSyncLockBlocking(context.Background(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,14 +24,14 @@ func TestStateRepoSyncLockBlocksSecondNonBlockingAcquire(t *testing.T) {
 
 func TestStateRepoSyncLockBlockingWaits(t *testing.T) {
 	dir := t.TempDir()
-	first, err := acquireStateRepoSyncLockBlocking(dir)
+	first, err := acquireStateRepoSyncLockBlocking(context.Background(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	done := make(chan error, 1)
 	go func() {
-		lock, err := acquireStateRepoSyncLockBlocking(dir)
+		lock, err := acquireStateRepoSyncLockBlocking(context.Background(), dir)
 		if err != nil {
 			done <- err
 			return
@@ -53,9 +53,31 @@ func TestStateRepoSyncLockBlockingWaits(t *testing.T) {
 	}
 }
 
+func TestStateRepoSyncLockBlockingRespectsContext(t *testing.T) {
+	dir := t.TempDir()
+	first, err := acquireStateRepoSyncLockBlocking(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Release()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+
+	started := time.Now()
+	_, err = acquireStateRepoSyncLockBlocking(ctx, dir)
+	elapsed := time.Since(started)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context deadline, got %v", err)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("timed-out acquire hung too long: %v", elapsed)
+	}
+}
+
 func TestStateRepoSyncLockConcurrentCLIAndAgent(t *testing.T) {
 	dir := t.TempDir()
-	agentLock, err := acquireStateRepoSyncLockBlocking(dir)
+	agentLock, err := acquireStateRepoSyncLockBlocking(context.Background(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,6 +7,19 @@ import (
 	"strings"
 )
 
+// headSHAsEqual reports whether two published short SHAs refer to the same tip.
+// Machines may abbreviate differently (historical bare --short / core.abbrev vs
+// fixed --short=12), so equality is shared-prefix: either string is a prefix of
+// the other after normalizing case/whitespace.
+func headSHAsEqual(a, b string) bool {
+	a = strings.ToLower(strings.TrimSpace(a))
+	b = strings.ToLower(strings.TrimSpace(b))
+	if a == "" || b == "" {
+		return false
+	}
+	return a == b || strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
+}
+
 // SituationKind identifies a cross-machine or local awareness cue.
 // Nudges suggest verbs only; the tool never runs git mutations on user repos.
 type SituationKind string
@@ -284,6 +297,8 @@ func detectGroupSituations(g ProjectGroup) []Situation {
 	}
 
 	// Same branch, different HEAD tip (uses published short SHAs; no object fetch).
+	// Equality is shared-prefix so older 7-char and newer 12-char abbrevs of the
+	// same tip do not false-alarm as tip_mismatch across machines.
 	if local != nil && len(remote) > 0 && !branchMismatch {
 		localSHA := strings.TrimSpace(local.Repo.HeadSHA)
 		localBranch := strings.TrimSpace(local.Repo.Branch)
@@ -296,7 +311,7 @@ func detectGroupSituations(g ProjectGroup) []Situation {
 				if otherBranch != localBranch || otherSHA == "" {
 					continue
 				}
-				if otherSHA != localSHA {
+				if !headSHAsEqual(localSHA, otherSHA) {
 					tipParts = append(tipParts, fmt.Sprintf("%s on %s", otherSHA, formatMachineLabel(r)))
 					if r.Stale {
 						tipStale = true

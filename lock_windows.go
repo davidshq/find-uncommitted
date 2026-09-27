@@ -9,24 +9,12 @@ import (
 )
 
 func lockFileExclusive(f *os.File) error {
-	return lockFileEx(f, true)
-}
-
-func lockFileExclusiveBlocking(f *os.File) error {
-	return lockFileEx(f, false)
-}
-
-func lockFileEx(f *os.File, failImmediately bool) error {
 	const exclusive = 0x00000002
-	const failImmediatelyFlag = 0x00000001
-	flags := exclusive
-	if failImmediately {
-		flags |= failImmediatelyFlag
-	}
+	const failImmediately = 0x00000001
 	var ol syscall.Overlapped
 	r1, _, e1 := procLockFileEx.Call(
 		f.Fd(),
-		uintptr(flags),
+		uintptr(exclusive|failImmediately),
 		0,
 		1,
 		0,

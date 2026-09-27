@@ -132,7 +132,8 @@ func projectBranchesDiffer(byMachine map[string]AggregateRow) bool {
 
 // projectTipsDiffer reports whether any two machines share a branch name but
 // disagree on HeadSHA (same predicate as tip_mismatch situations). Detached
-// HEAD and missing SHAs are ignored.
+// HEAD and missing SHAs are ignored. Uses headSHAsEqual so abbrev-length
+// differences across machines are not treated as divergence.
 func projectTipsDiffer(byMachine map[string]AggregateRow) bool {
 	firstSHA := map[string]string{} // branch -> first non-empty short SHA
 	for _, row := range byMachine {
@@ -142,7 +143,7 @@ func projectTipsDiffer(byMachine map[string]AggregateRow) bool {
 			continue
 		}
 		if prev, ok := firstSHA[branch]; ok {
-			if prev != sha {
+			if !headSHAsEqual(prev, sha) {
 				return true
 			}
 			continue

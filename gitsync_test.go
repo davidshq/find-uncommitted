@@ -186,6 +186,84 @@ func TestPublishPushesWhenAheadWithoutNewCommit(t *testing.T) {
 	}
 }
 
+func TestPublishSurfacesRevListErrorWhenCheckingAhead(t *testing.T) {
+	dir := t.TempDir()
+	g := newScriptedGit()
+	g.enqueue("status", gitResult{stdout: ""})
+	g.enqueue("rev-list", gitResult{
+		stderr: "fatal: bad object refs/remotes/origin/main",
+		err:    errors.New("exit status 128"),
+	})
+
+	cfg := SyncConfig{
+		StateRepoDir: dir,
+		MachineID:    "box",
+		Heartbeat:    time.Hour,
+		Runner:       g,
+	}
+	path := SnapshotFilePath(dir, "box")
+	snap := MachineSnapshot{
+		MachineID: "box",
+		UpdatedAt: time.Now().UTC().Add(-time.Minute),
+		Repos:     []RepoSnapshot{{Path: "/a", Branch: "main", IsClean: true}},
+		Meta:      ScanMetadata{RepoCount: 1, ScanRoot: "/"},
+	}
+	if err := WriteMachineSnapshot(path, snap); err != nil {
+		t.Fatal(err)
+	}
+	next := snap
+	next.UpdatedAt = time.Now().UTC()
+
+	published, err := PublishLocalSnapshot(context.Background(), cfg, next)
+	if published {
+		t.Fatal("expected no publish on rev-list failure")
+	}
+	var warn SyncWarning
+	if !errors.As(err, &warn) {
+		t.Fatalf("expected SyncWarning, got %T %v", err, err)
+	}
+	if !strings.Contains(warn.Message, "ahead of upstream") {
+		t.Fatalf("message: %s", warn.Message)
+	}
+}
+
+func TestPublishSkipsAheadCheckWhenNoUpstream(t *testing.T) {
+	dir := t.TempDir()
+	g := newScriptedGit()
+	g.enqueue("status", gitResult{stdout: ""})
+	g.enqueue("rev-list", gitResult{
+		stderr: "fatal: no upstream configured for branch 'main'",
+		err:    errors.New("exit status 128"),
+	})
+
+	cfg := SyncConfig{
+		StateRepoDir: dir,
+		MachineID:    "box",
+		Heartbeat:    time.Hour,
+		Runner:       g,
+	}
+	path := SnapshotFilePath(dir, "box")
+	snap := MachineSnapshot{
+		MachineID: "box",
+		UpdatedAt: time.Now().UTC().Add(-time.Minute),
+		Repos:     []RepoSnapshot{{Path: "/a", Branch: "main", IsClean: true}},
+		Meta:      ScanMetadata{RepoCount: 1, ScanRoot: "/"},
+	}
+	if err := WriteMachineSnapshot(path, snap); err != nil {
+		t.Fatal(err)
+	}
+	next := snap
+	next.UpdatedAt = time.Now().UTC()
+
+	published, err := PublishLocalSnapshot(context.Background(), cfg, next)
+	if err != nil {
+		t.Fatalf("no-upstream should be quiet skip, got %v", err)
+	}
+	if published {
+		t.Fatal("expected no publish when no upstream")
+	}
+}
+
 func TestPublishCommitsOnHeartbeat(t *testing.T) {
 	dir := t.TempDir()
 	g := newScriptedGit()

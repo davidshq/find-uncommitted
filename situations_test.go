@@ -204,6 +204,50 @@ func TestDetectSituationsTipMismatch(t *testing.T) {
 	}
 }
 
+func TestDetectSituationsTipMatchAcrossAbbrevLengths(t *testing.T) {
+	rows := []AggregateRow{
+		{
+			Machine: "laptop",
+			Local:   true,
+			Repo: RepoSnapshot{
+				Path:    "/l/app",
+				Origin:  "github.com/acme/app",
+				Branch:  "main",
+				HeadSHA: "abcdef1", // historical ~7-char abbrev
+				IsClean: true,
+			},
+		},
+		{
+			Machine: "desktop",
+			Repo: RepoSnapshot{
+				Path:    "/d/app",
+				Origin:  "github.com/acme/app",
+				Branch:  "main",
+				HeadSHA: "abcdef123456", // fixed --short=12 of same tip
+				IsClean: true,
+			},
+		},
+	}
+	got := DetectSituations(rows)
+	for _, s := range got {
+		if s.Kind == SituationTipMismatch {
+			t.Fatalf("shared-prefix SHAs must not tip_mismatch: %+v", got)
+		}
+	}
+}
+
+func TestHeadSHAsEqual(t *testing.T) {
+	if !headSHAsEqual("abcdef1", "abcdef123456") {
+		t.Fatal("7 vs 12 shared prefix should match")
+	}
+	if headSHAsEqual("aaa1111", "bbb2222") {
+		t.Fatal("different tips must not match")
+	}
+	if headSHAsEqual("", "abcdef1") {
+		t.Fatal("empty must not match")
+	}
+}
+
 func TestDetectSituationsStaleEvidenceWhenRemoteNeedsAttention(t *testing.T) {
 	rows := []AggregateRow{
 		{

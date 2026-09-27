@@ -69,6 +69,14 @@ func TestProjectTipsDiffer(t *testing.T) {
 		t.Fatal("matching tips should not differ")
 	}
 
+	abbrevLen := map[string]AggregateRow{
+		"laptop":  {Repo: RepoSnapshot{Branch: "main", HeadSHA: "abcdef1"}},
+		"desktop": {Repo: RepoSnapshot{Branch: "main", HeadSHA: "abcdef123456"}},
+	}
+	if projectTipsDiffer(abbrevLen) {
+		t.Fatal("shared-prefix abbrevs of same tip should not differ")
+	}
+
 	diverged := map[string]AggregateRow{
 		"laptop":  {Repo: RepoSnapshot{Branch: "main", HeadSHA: "aaa1111"}},
 		"desktop": {Repo: RepoSnapshot{Branch: "main", HeadSHA: "bbb2222"}},

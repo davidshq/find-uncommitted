@@ -553,7 +553,7 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoSnapshot {
 		// Check if it's a detached HEAD state (exit code 1)
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			// Try to get the commit hash instead
-			commit, _, commitErr := gitexec.Run(ctx, repoPath, "rev-parse", "--short", "HEAD")
+			commit, _, commitErr := gitexec.Run(ctx, repoPath, "rev-parse", fmt.Sprintf("--short=%d", shortHeadSHALen), "HEAD")
 			if commitErr == nil {
 				status.Branch = fmt.Sprintf("detached HEAD (%s)", strings.TrimSpace(commit))
 			} else if setGitCancelled(ctx, &status, commitErr) {
@@ -652,9 +652,14 @@ func revListCount(ctx context.Context, repoPath, revRange string) int {
 	return count
 }
 
-// shortHeadSHA returns a short HEAD commit hash, or empty when unavailable.
+// shortHeadSHALen is the fixed abbrev length for published HeadSHA values.
+// Using an explicit length (not bare --short) avoids core.abbrev mismatches
+// across machines that would otherwise look like tip_mismatch.
+const shortHeadSHALen = 12
+
+// shortHeadSHA returns a fixed-length short HEAD commit hash, or empty when unavailable.
 func shortHeadSHA(ctx context.Context, repoPath string) string {
-	out, _, err := gitexec.Run(ctx, repoPath, "rev-parse", "--short", "HEAD")
+	out, _, err := gitexec.Run(ctx, repoPath, "rev-parse", fmt.Sprintf("--short=%d", shortHeadSHALen), "HEAD")
 	if err != nil {
 		return ""
 	}

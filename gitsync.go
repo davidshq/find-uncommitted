@@ -70,7 +70,7 @@ func (w SyncWarning) Unwrap() error { return w.Err }
 
 // PullStateRepo fetches latest remote state with rebase (agent publish path).
 func PullStateRepo(ctx context.Context, cfg SyncConfig) error {
-	lock, err := acquireStateRepoSyncLockBlocking(cfg.StateRepoDir)
+	lock, err := acquireStateRepoSyncLockBlocking(ctx, cfg.StateRepoDir)
 	if err != nil {
 		return SyncWarning{
 			Message: "could not acquire state repo sync lock",
@@ -210,11 +210,33 @@ func aheadOfUpstreamCount(ctx context.Context, cfg SyncConfig) (int, error) {
 	return n, nil
 }
 
+// isNoUpstreamRevListError reports @{u} resolution failures that mean there is
+// nothing to flush (no tracking branch), as opposed to transient remote errors.
+func isNoUpstreamRevListError(err error) bool {
+	if err == nil {
+		return false
+	}
+	combined := strings.ToLower(err.Error())
+	return strings.Contains(combined, "no upstream configured") ||
+		strings.Contains(combined, "does not point to a branch")
+}
+
 // pushIfAhead rebases and pushes when local commits are not on the remote yet.
+// No-upstream is treated as nothing to flush. Other rev-list failures surface
+// as SyncWarning so the next tick retries instead of silently leaving commits
+// unpublished after a prior commit-ok/push-fail.
 func pushIfAhead(ctx context.Context, cfg SyncConfig) (bool, error) {
 	n, err := aheadOfUpstreamCount(ctx, cfg)
-	if err != nil || n == 0 {
-		// No upstream / not ahead: nothing to flush.
+	if err != nil {
+		if isNoUpstreamRevListError(err) {
+			return false, nil
+		}
+		return false, SyncWarning{
+			Message: "could not check if state repo is ahead of upstream",
+			Err:     err,
+		}
+	}
+	if n == 0 {
 		return false, nil
 	}
 	if err := rebaseAndPush(ctx, cfg); err != nil {

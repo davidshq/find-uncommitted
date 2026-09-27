@@ -123,7 +123,7 @@ func runAgentTick(ctx context.Context, cfg AgentConfig) {
 		fmt.Fprintf(os.Stderr, "warning: "+format+"\n", args...)
 	}
 
-	lock, err := acquireStateRepoSyncLockBlocking(cfg.StateRepoDir)
+	lock, err := acquireStateRepoSyncLockBlocking(ctx, cfg.StateRepoDir)
 	if err != nil {
 		warn("%v", err)
 		return
@@ -171,7 +171,7 @@ func smokePublishOnce(cfg AgentConfig) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.tickTimeout())
 	defer cancel()
 
-	lock, err := acquireStateRepoSyncLockBlocking(cfg.StateRepoDir)
+	lock, err := acquireStateRepoSyncLockBlocking(ctx, cfg.StateRepoDir)
 	if err != nil {
 		return "", err
 	}
