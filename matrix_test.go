@@ -37,26 +37,102 @@ func TestFormatMatrixStatus(t *testing.T) {
 
 func TestFormatMatrixCellBranchRules(t *testing.T) {
 	dirty := AggregateRow{Repo: RepoSnapshot{IsDirty: true, Branch: "feature/x"}}
-	got := formatMatrixCellForProject(dirty, false)
+	got := formatMatrixCellForProject(dirty, false, false)
 	if !strings.Contains(got, "dirty") || !strings.Contains(got, "feature/x") {
 		t.Fatalf("non-clean should show branch: %q", got)
 	}
 
 	clean := AggregateRow{Repo: RepoSnapshot{IsClean: true, Branch: "main"}}
-	got = formatMatrixCellForProject(clean, false)
+	got = formatMatrixCellForProject(clean, false, false)
 	if got != "clean" {
 		t.Fatalf("matching clean should omit branch: %q", got)
 	}
 
-	got = formatMatrixCellForProject(clean, true)
+	got = formatMatrixCellForProject(clean, true, false)
 	if !strings.Contains(got, "main") {
 		t.Fatalf("branch mismatch should show branch on clean: %q", got)
 	}
 
 	stale := AggregateRow{Stale: true, Repo: RepoSnapshot{HasUnpushed: true, AheadCount: 2, Branch: "main"}}
-	got = formatMatrixCellForProject(stale, false)
+	got = formatMatrixCellForProject(stale, false, false)
 	if !strings.Contains(got, "stale") || !strings.Contains(got, "↑2") {
 		t.Fatalf("stale unpushed: %q", got)
+	}
+}
+
+func TestProjectTipsDiffer(t *testing.T) {
+	same := map[string]AggregateRow{
+		"laptop":  {Repo: RepoSnapshot{Branch: "main", HeadSHA: "aaa1111"}},
+		"desktop": {Repo: RepoSnapshot{Branch: "main", HeadSHA: "aaa1111"}},
+	}
+	if projectTipsDiffer(same) {
+		t.Fatal("matching tips should not differ")
+	}
+
+	diverged := map[string]AggregateRow{
+		"laptop":  {Repo: RepoSnapshot{Branch: "main", HeadSHA: "aaa1111"}},
+		"desktop": {Repo: RepoSnapshot{Branch: "main", HeadSHA: "bbb2222"}},
+	}
+	if !projectTipsDiffer(diverged) {
+		t.Fatal("same branch different SHA should differ")
+	}
+
+	branchMismatch := map[string]AggregateRow{
+		"laptop":  {Repo: RepoSnapshot{Branch: "main", HeadSHA: "aaa1111"}},
+		"desktop": {Repo: RepoSnapshot{Branch: "feature", HeadSHA: "bbb2222"}},
+	}
+	if projectTipsDiffer(branchMismatch) {
+		t.Fatal("different branches are not tip mismatch")
+	}
+
+	missingSHA := map[string]AggregateRow{
+		"laptop":  {Repo: RepoSnapshot{Branch: "main", HeadSHA: "aaa1111"}},
+		"desktop": {Repo: RepoSnapshot{Branch: "main"}},
+	}
+	if projectTipsDiffer(missingSHA) {
+		t.Fatal("missing SHA should be ignored")
+	}
+}
+
+func TestFormatMatrixCellTipMismatch(t *testing.T) {
+	clean := AggregateRow{Repo: RepoSnapshot{IsClean: true, Branch: "main", HeadSHA: "aaa1111"}}
+	got := formatMatrixCellForProject(clean, false, true)
+	if got != "clean · tip≠aaa1111" {
+		t.Fatalf("clean tip mismatch: %q", got)
+	}
+
+	dirty := AggregateRow{Repo: RepoSnapshot{IsDirty: true, Branch: "main", HeadSHA: "bbb2222"}}
+	got = formatMatrixCellForProject(dirty, false, true)
+	if !strings.Contains(got, "dirty") || !strings.Contains(got, "main") || !strings.Contains(got, "tip≠bbb2222") {
+		t.Fatalf("dirty tip mismatch should keep branch+tip: %q", got)
+	}
+
+	noSHA := AggregateRow{Repo: RepoSnapshot{IsClean: true, Branch: "main"}}
+	got = formatMatrixCellForProject(noSHA, false, true)
+	if got != "clean · tip≠" {
+		t.Fatalf("tip cue without SHA: %q", got)
+	}
+}
+
+func TestDisplayProjectMachineMatrixTipMismatchVisible(t *testing.T) {
+	rows := []AggregateRow{
+		{Machine: "laptop", Local: true, Repo: RepoSnapshot{
+			Origin: "github.com/you/app", Path: "/repos/app", Branch: "main",
+			IsClean: true, HeadSHA: "aaa1111",
+		}},
+		{Machine: "desktop", Repo: RepoSnapshot{
+			Origin: "github.com/you/app", Path: "/Users/you/app", Branch: "main",
+			IsClean: true, HeadSHA: "bbb2222",
+		}},
+	}
+	out := captureStdout(t, func() {
+		displayProjectMachineMatrix(rows)
+	})
+	if !strings.Contains(out, "tip≠aaa1111") || !strings.Contains(out, "tip≠bbb2222") {
+		t.Fatalf("diverged tips must appear in matrix cells: %s", out)
+	}
+	if strings.Contains(out, "Attention") {
+		t.Fatalf("matrix-only view should not print Attention: %s", out)
 	}
 }
 

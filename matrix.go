@@ -130,15 +130,46 @@ func projectBranchesDiffer(byMachine map[string]AggregateRow) bool {
 	return false
 }
 
+// projectTipsDiffer reports whether any two machines share a branch name but
+// disagree on HeadSHA (same predicate as tip_mismatch situations). Detached
+// HEAD and missing SHAs are ignored.
+func projectTipsDiffer(byMachine map[string]AggregateRow) bool {
+	firstSHA := map[string]string{} // branch -> first non-empty short SHA
+	for _, row := range byMachine {
+		branch := strings.TrimSpace(row.Repo.Branch)
+		sha := strings.TrimSpace(row.Repo.HeadSHA)
+		if branch == "" || sha == "" || strings.HasPrefix(branch, "detached HEAD") {
+			continue
+		}
+		if prev, ok := firstSHA[branch]; ok {
+			if prev != sha {
+				return true
+			}
+			continue
+		}
+		firstSHA[branch] = sha
+	}
+	return false
+}
+
 // formatMatrixCellForProject builds one matrix cell. Branch is shown when
 // branches differ across the project or the status is not clean (glance aid).
-func formatMatrixCellForProject(row AggregateRow, branchesDiffer bool) string {
+// When tips differ on the same branch, cells include tip≠<shortSHA> so the
+// default matrix does not look clean/clean on divergent HEADs.
+func formatMatrixCellForProject(row AggregateRow, branchesDiffer, tipsDiffer bool) string {
 	status := formatMatrixStatus(row.Repo)
 	showBranch := branchesDiffer || status != "clean"
 	cell := status
 	if showBranch {
 		if b := strings.TrimSpace(row.Repo.Branch); b != "" {
 			cell = status + " · " + b
+		}
+	}
+	if tipsDiffer {
+		if sha := strings.TrimSpace(row.Repo.HeadSHA); sha != "" {
+			cell += " · tip≠" + sha
+		} else {
+			cell += " · tip≠"
 		}
 	}
 	if row.Stale {
@@ -270,12 +301,13 @@ func displayProjectMachineMatrix(rows []AggregateRow) {
 			collapsed[mid] = collapseRowsForMachine(list)
 		}
 		branchesDiffer := projectBranchesDiffer(collapsed)
+		tipsDiffer := projectTipsDiffer(collapsed)
 
 		cells := make([]string, len(cols))
 		for i, c := range cols {
 			cell := "—"
 			if row, ok := collapsed[c.ID]; ok {
-				cell = formatMatrixCellForProject(row, branchesDiffer)
+				cell = formatMatrixCellForProject(row, branchesDiffer, tipsDiffer)
 			}
 			cells[i] = cell
 			if n := utf8.RuneCountInString(cell); n > cellWidths[i] {

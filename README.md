@@ -215,7 +215,7 @@ Install the Go binary first, then see [vscode-extension/README.md](vscode-extens
 
 **BREAKING (human tree-scan output):** the default primary view is a **Project × Machine matrix** (one row per project, columns per machine). Path-centric **Full inventory** and the leading **Attention** list are opt-in via `--inventory` / `--verbose`. Situation detection is unchanged; `check` still prints nudges for one project. Visual reference: [`mockup/fork-b-correlated-view.html`](mockup/fork-b-correlated-view.html).
 
-Default matrix cells use compact tokens (`clean`, `dirty`, `↑N`, `↓N`, `stale`, …). Local machine columns are marked with `*`. Stale machines are annotated in cells and summarized after output when remotes are loaded.
+Default matrix cells use compact tokens (`clean`, `dirty`, `↑N`, `↓N`, `stale`, …). When machines share a branch but disagree on HEAD, cells include `tip≠<shortSHA>` so same-branch divergence is visible without `--inventory`. Local machine columns are marked with `*`. Stale machines are annotated in cells and summarized after output when remotes are loaded.
 
 Situation kinds (still detected; shown as Attention under `--inventory`, or via `check`) include:
 
@@ -249,13 +249,14 @@ Default tree scan (Project × Machine matrix):
 
 ```
 Projects  (you are laptop*)
-Project                         laptop*              desktop               laptop-old
------------------------------------------------------------------------------------------------
-github.com/you/work-project     dirty · feature/pay  dirty · feature/pay  —
-github.com/you/notes            ↑3 · main            clean                 —
-github.com/you/api              clean                clean                 ↑2 stale
+Project                         laptop*                    desktop                     laptop-old
+---------------------------------------------------------------------------------------------------------
+github.com/you/work-project     dirty · feature/pay        dirty · feature/pay        —
+github.com/you/notes            ↑3 · main                  clean                       —
+github.com/you/api              clean                      clean                       ↑2 stale
+github.com/you/docs             clean · tip≠aaa1111        clean · tip≠bbb2222        —
 
-Summary: 2 local repos (2 need attention), 3 remote repos (2 need attention, 1 stale rows), 0 load errors
+Summary: 3 local repos (3 need attention), 4 remote repos (3 need attention, 1 stale rows), 0 load errors
 ```
 
 Opt-in path inventory (`--inventory` or `--verbose`) restores Attention + Full inventory:
