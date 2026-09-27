@@ -32,17 +32,68 @@ func TestShouldPersistStableMachineID(t *testing.T) {
 }
 
 func TestArgsHasAgentMode(t *testing.T) {
-	if !argsHasAgentMode([]string{"--agent"}) {
-		t.Fatal("expected --agent")
+	if argsHasAgentMode([]string{"--agent"}) {
+		t.Fatal("--agent is not a mode flag anymore")
 	}
-	if !argsHasAgentMode([]string{"--state-repo", "x", "--agent", "C:\\code"}) {
-		t.Fatal("expected --agent among flags")
+	if argsHasAgentMode([]string{"--state-repo", "x", "--agent", "C:\\code"}) {
+		t.Fatal("--agent among flags is not agent mode")
 	}
-	if !argsHasAgentMode([]string{"--agent=true"}) {
-		t.Fatal("expected --agent=true")
-	}
-	if argsHasAgentMode([]string{"--install-scheduler", "C:\\code"}) {
+	if argsHasAgentMode([]string{"install-scheduler", "C:\\code"}) {
 		t.Fatal("install-scheduler is not agent mode")
+	}
+	if !argsHasAgentMode([]string{"agent"}) {
+		t.Fatal("expected soft command agent")
+	}
+	if !argsHasAgentMode([]string{"--state-repo", "/state", "agent", "/scan"}) {
+		t.Fatal("expected soft command agent after flags")
+	}
+	if argsHasAgentMode([]string{"--machine-id", "agent"}) {
+		t.Fatal("machine-id value agent must not trigger agent mode")
+	}
+	if argsHasAgentMode([]string{"check", "."}) {
+		t.Fatal("check is not agent mode")
+	}
+}
+
+func TestParseSoftCommand(t *testing.T) {
+	mode, rest, err := parseSoftCommand(nil)
+	if err != nil || mode != softNone || rest != nil {
+		t.Fatalf("empty: mode=%q rest=%v err=%v", mode, rest, err)
+	}
+
+	mode, rest, err = parseSoftCommand([]string{"/scan"})
+	if err != nil || mode != softNone || len(rest) != 1 || rest[0] != "/scan" {
+		t.Fatalf("scan root: mode=%q rest=%v err=%v", mode, rest, err)
+	}
+
+	mode, rest, err = parseSoftCommand([]string{"agent", "/scan"})
+	if err != nil || mode != softAgent || len(rest) != 1 || rest[0] != "/scan" {
+		t.Fatalf("agent: mode=%q rest=%v err=%v", mode, rest, err)
+	}
+
+	mode, rest, err = parseSoftCommand([]string{"install-scheduler", "/scan"})
+	if err != nil || mode != softInstallScheduler || len(rest) != 1 || rest[0] != "/scan" {
+		t.Fatalf("install: mode=%q rest=%v err=%v", mode, rest, err)
+	}
+
+	mode, rest, err = parseSoftCommand([]string{"uninstall-scheduler"})
+	if err != nil || mode != softUninstallScheduler || rest != nil {
+		t.Fatalf("uninstall: mode=%q rest=%v err=%v", mode, rest, err)
+	}
+
+	if _, _, err := parseSoftCommand([]string{"agent", "/a", "/b"}); err == nil {
+		t.Fatal("expected error for extra agent args")
+	}
+	if _, _, err := parseSoftCommand([]string{"doctor", "x"}); err == nil {
+		t.Fatal("expected error for doctor args")
+	}
+	if _, _, err := parseSoftCommand([]string{"uninstall-scheduler", "/x"}); err == nil {
+		t.Fatal("expected error for uninstall args")
+	}
+
+	mode, rest, err = parseSoftCommand([]string{"check", "--json", "."})
+	if err != nil || mode != softCheck || len(rest) != 3 || rest[0] != "check" {
+		t.Fatalf("check passthrough: mode=%q rest=%v err=%v", mode, rest, err)
 	}
 }
 

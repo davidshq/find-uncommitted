@@ -15,7 +15,7 @@ import (
 
 const schedulerTaskName = "FindUncommittedAgent"
 
-// installScheduler registers an at-logon task that runs the exe with --agent.
+// installScheduler registers an at-logon task that runs the exe with soft command agent.
 // The agent detaches its console when it owns it (see detachAgentConsoleIfOwned),
 // so no visible cmd window stays open. Scan settings come from sticky config.
 //
@@ -39,7 +39,7 @@ func installScheduler(exePath string) error {
 		return fmt.Errorf("install Windows task: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	fmt.Printf("Installed Windows scheduled task %q (starts agent at logon, restart on failure, no console window).\n", schedulerTaskName)
-	fmt.Printf("Task runs: %s --agent\n", exePath)
+	fmt.Printf("Task runs: %s agent\n", exePath)
 	printAgentStickyConfigHint()
 	return nil
 }
@@ -195,7 +195,7 @@ func writeSchedulerTaskXML(exePath, userID string) (string, error) {
 	t.Settings.RestartOnFailure.Count = 999
 	t.Actions.Context = "Author"
 	t.Actions.Exec.Command = exePath
-	t.Actions.Exec.Arguments = "--agent"
+	t.Actions.Exec.Arguments = "agent"
 
 	body, err := xml.MarshalIndent(t, "", "  ")
 	if err != nil {

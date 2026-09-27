@@ -95,7 +95,7 @@ func collectDoctorReport(ctx context.Context, in DoctorInput) doctorReport {
 	case in.ConfigExists:
 		r.ok("config path: %s", in.ConfigPath)
 	default:
-		r.warn("config path missing: %s (run --install-scheduler or create sticky config)", in.ConfigPath)
+		r.warn("config path missing: %s (run install-scheduler or create sticky config)", in.ConfigPath)
 	}
 
 	r.info("machine_id=%s (%s)", in.MachineID, formatConfigSource(in.Resolved.MachineIDSource, "hostname"))

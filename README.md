@@ -78,19 +78,19 @@ Use a **private** Git repository as a sync bus so each machine publishes its lat
 - Each machine writes only its own file: `machines/<sanitized>-<hash>.json` (short hash of the raw machine id avoids collisions after path-unsafe characters are sanitized)
 - Each repo entry includes a normalized **`origin`** URL (when configured) so the same project can be correlated across machines even when local paths differ; SSH and HTTPS remotes canonicalize to the same key
 - Aggregate rows sort by that identity (origin, or path basename for local-only repos) so copies of one project land together
-- Background `--agent` mode pulls, scans, writes, and push/rebases on a check interval (default **2m**)
+- Background `agent` mode pulls, scans, writes, and push/rebases on a check interval (default **2m**)
 - Each agent tick has a **2m deadline**; every individual git subprocess has a **30s** deadline (`CommandContext`). Hung credential prompts or stuck git abort the tick with a warning instead of stalling forever while the process looks healthy. On Windows, cancel kills the git **process tree** without flashing a console, and git itself is started with no window. Large scan roots that cannot finish within `2m` can raise `--tick-timeout` (for example `15m`) without changing the default
 - Agent git invocations set `GIT_TERMINAL_PROMPT=0` so interactive credential waits fail fast
 - Interactive scans load remotes when a state repo is resolved from `--state-repo`, `FIND_UNCOMMITTED_STATE_REPO`, or sticky TOML config (unless `--no-remote`)
 - Agent and interactive CLI coordinate on the state clone with a flock on `.find-uncommitted-sync.lock`; if the agent is publishing, the CLI skips `git pull` and uses on-disk snapshots
-- On `--install-scheduler`, a stable `machine_id` is generated and saved when none is configured (hostname + random suffix) so cloned VMs do not silently share an id
+- On `install-scheduler`, a stable `machine_id` is generated and saved when none is configured (hostname + random suffix) so cloned VMs do not silently share an id
 - Snapshots older than `--stale-ttl` (default **30m**) are labeled **stale**
 - Unchanged status does not create commits every tick; a **heartbeat** commit (default **15m**, sticky `heartbeat`) refreshes `updated_at` so remote views stay fresh without chatty history. Content changes still publish on the check that detects them
 - Agent exits cleanly on Ctrl+C / SIGTERM (mid-tick git work is cancelled)
 
 ### Sticky config (recommended)
 
-After `--install-scheduler`, settings are written to a user-scoped TOML file so bare scans include remotes without retyping `--state-repo`:
+After `install-scheduler`, settings are written to a user-scoped TOML file so bare scans include remotes without retyping `--state-repo`:
 
 | Platform | Path |
 |----------|------|
@@ -102,7 +102,7 @@ Example:
 ```toml
 state_repo = "/path/to/uncommitted-state"
 scan_root = "/path/to/repos"
-machine_id = "my-laptop-a1b2"  # auto-generated on --install-scheduler if unset
+machine_id = "my-laptop-a1b2"  # auto-generated on install-scheduler if unset
 interval = "2m"       # how often to check (scan + publish decision)
 heartbeat = "15m"     # liveness commit when status is unchanged
 stale_ttl = "30m"     # mark remote snapshots stale after this (keep ≈ 2× heartbeat)
@@ -136,7 +136,9 @@ Operability check (config path, agent/sync locks, last publish, scheduler health
 
 When config supplies `state_repo`, the CLI prints a short stderr notice and aggregates remotes. Use `--no-remote` for a local-only scan. If the configured state clone path is missing or invalid, the scan **exits with an error** (so a bad sticky config cannot silently look like a local-only machine). If the clone is valid but offline/`git pull` fails, the tool warns and still shows local results plus any on-disk snapshots. Corrupt individual snapshot JSON files are skipped with a stderr warning; valid siblings still appear in the aggregate.
 
-`--install-scheduler` runs a one-shot **smoke publish** before registering the OS scheduler, then prints the snapshot path so you can confirm a file landed in the state repo.
+`install-scheduler` runs a one-shot **smoke publish** before registering the OS scheduler, then prints the snapshot path so you can confirm a file landed in the state repo.
+
+**Migration:** If you installed the scheduler before sticky config existed, re-run `install-scheduler` once (or create the TOML file manually). Until then, interactive scans stay local-only unless you pass `--state-repo`.
 
 If your sticky config still has `stale_ttl = "5m"` from an older install, bump it to `30m`, or set an explicit `heartbeat` so `stale_ttl` is at least ~2× it (e.g. `heartbeat = "2m"` with `stale_ttl = "5m"`). Newer defaults use a `15m` heartbeat when unset; leaving `stale_ttl` at `5m` makes healthy machines look stale for most of each heartbeat window.
 
@@ -149,10 +151,12 @@ Correlation survives redaction, and machines may mix settings: repositories are 
 ### Setup / auto-run (Windows & Linux)
 
 ```bash
-./binaries/find-uncommitted --install-scheduler --state-repo /path/to/state-clone /path/to/scan/root
-./binaries/find-uncommitted --uninstall-scheduler
-./binaries/find-uncommitted --agent --state-repo /path/to/state-clone /path/to/scan/root   # foreground
+./binaries/find-uncommitted --state-repo /path/to/state-clone install-scheduler /path/to/scan/root
+./binaries/find-uncommitted uninstall-scheduler
+./binaries/find-uncommitted --state-repo /path/to/state-clone agent /path/to/scan/root   # foreground
 ```
+
+After upgrading past the soft-command CLI, re-run `install-scheduler` on each machine so the OS unit/task invokes `agent` (old installs used `--agent`, which is no longer accepted).
 
 Full prerequisites, session vs always-on, linger scope, and verify steps: **[docs/auto-run-setup.md](docs/auto-run-setup.md)**. macOS scheduler is not supported yet.
 
@@ -228,7 +232,8 @@ Useful flags:
 |------|---------|
 | `--inventory` / `--verbose` | Path-centric Full inventory + Attention (former default layout) |
 | `--state-repo` | Local clone of the private sync Git repo |
-| `--agent` | Background publish loop |
+| `agent` | Soft command: background publish loop |
+| `install-scheduler` / `uninstall-scheduler` | Soft commands: OS autostart (install writes sticky config + smoke-publishes) |
 | `--interval` | Check interval: scan + publish decision (default `2m`) |
 | `--heartbeat` | Liveness commit when status unchanged (default `15m`) |
 | `--stale-ttl` | Staleness threshold (default `30m`; keep ≈ 2× `heartbeat`) |
@@ -237,7 +242,6 @@ Useful flags:
 | `--machine-id` | Override hostname-based machine id |
 | `--redact-paths` | Publish basename-only paths |
 | `--no-remote` | Local scan only even if a state repo is configured |
-| `--install-scheduler` / `--uninstall-scheduler` | OS autostart integration (install writes sticky config + smoke-publishes a snapshot) |
 
 ## Output Example
 

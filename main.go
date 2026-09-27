@@ -49,14 +49,11 @@ func main() {
 	flag.BoolVar(&verboseOut, "verbose", false, "Same as --inventory: path table + Attention (audit trail)")
 	flag.StringVar(&outputFile, "output", "", "Save results to CSV file (e.g., --output results.csv)")
 	flag.StringVar(&stateRepo, "state-repo", "", "Local path to private Git state repository for cross-machine sync")
-	flag.BoolVar(&agentMode, "agent", false, "Run as background agent publishing machine snapshots")
 	flag.StringVar(&intervalStr, "interval", DefaultIntervalString, fmt.Sprintf("Agent check interval (default %s)", DefaultIntervalString))
 	flag.StringVar(&heartbeatStr, "heartbeat", DefaultHeartbeatString, fmt.Sprintf("Agent liveness commit interval when status unchanged (default %s)", DefaultHeartbeatString))
 	flag.StringVar(&staleTTLStr, "stale-ttl", DefaultStaleTTLString, fmt.Sprintf("Mark machine snapshots stale after this duration (default %s)", DefaultStaleTTLString))
 	flag.StringVar(&tickTimeoutStr, "tick-timeout", DefaultTickTimeoutString, fmt.Sprintf("Agent per-tick deadline for pull, scan, and publish (default %s)", DefaultTickTimeoutString))
 	flag.StringVar(&machineID, "machine-id", "", "Machine identifier (default: hostname)")
-	flag.BoolVar(&installSched, "install-scheduler", false, "Install OS scheduler to run the agent at login")
-	flag.BoolVar(&uninstallSched, "uninstall-scheduler", false, "Remove OS scheduler registration")
 	flag.BoolVar(&redactPaths, "redact-paths", false, "Redact full paths in published snapshots (keep basename)")
 	flag.BoolVar(&skipRemote, "no-remote", false, "Skip loading other machines' snapshots even if state repo is configured")
 	flag.IntVar(&maxWorkers, "max-workers", 0, fmt.Sprintf("Max parallel repo checks (default %d; 0 = default)", gitexec.DefaultMaxWorkers))
@@ -64,17 +61,10 @@ func main() {
 	flag.BoolVar(&jsonOutput, "json", false, "With check: print machine-readable JSON to stdout (human text remains default)")
 	var printConfig bool
 	flag.BoolVar(&printConfig, "print-config", false, "Print resolved settings with sources and exit")
+	flag.Usage = printUsage
 	flag.Parse()
 	if verboseOut {
 		showInventory = true
-	}
-
-	if uninstallSched {
-		if err := uninstallScheduler(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		return
 	}
 
 	flagSet := map[string]bool{}
@@ -87,9 +77,25 @@ func main() {
 	checkPath := ""
 	doctorMode := false
 	var rootDirArg string
-	if len(args) >= 1 && args[0] == "check" {
+	softMode, softRest, softErr := parseSoftCommand(args)
+	if softErr != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", softErr)
+		switch softMode {
+		case softDoctor:
+			fmt.Fprintln(os.Stderr, "Usage: find-uncommitted [flags] doctor")
+		case softAgent:
+			fmt.Fprintln(os.Stderr, "Usage: find-uncommitted [flags] agent [directory_to_scan]")
+		case softInstallScheduler:
+			fmt.Fprintln(os.Stderr, "Usage: find-uncommitted [flags] install-scheduler [directory_to_scan]")
+		case softUninstallScheduler:
+			fmt.Fprintln(os.Stderr, "Usage: find-uncommitted [flags] uninstall-scheduler")
+		}
+		os.Exit(1)
+	}
+	switch softMode {
+	case softCheck:
 		checkMode = true
-		parsedPath, checkJSON, err := parseCheckArgs(args)
+		parsedPath, checkJSON, err := parseCheckArgs(softRest)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -98,15 +104,32 @@ func main() {
 		if checkJSON {
 			jsonOutput = true
 		}
-	} else if len(args) >= 1 && args[0] == "doctor" {
-		if len(args) > 1 {
-			fmt.Fprintf(os.Stderr, "Error: doctor takes no arguments\n")
-			fmt.Fprintln(os.Stderr, "Usage: find-uncommitted [flags] doctor")
+	case softDoctor:
+		doctorMode = true
+	case softAgent:
+		agentMode = true
+		if len(softRest) >= 1 {
+			rootDirArg = softRest[0]
+		}
+	case softInstallScheduler:
+		installSched = true
+		if len(softRest) >= 1 {
+			rootDirArg = softRest[0]
+		}
+	case softUninstallScheduler:
+		uninstallSched = true
+	case softNone:
+		if len(softRest) >= 1 {
+			rootDirArg = softRest[0]
+		}
+	}
+
+	if uninstallSched {
+		if err := uninstallScheduler(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		doctorMode = true
-	} else if len(args) >= 1 {
-		rootDirArg = args[0]
+		return
 	}
 
 	configPath, err := DefaultConfigPath()
@@ -245,7 +268,7 @@ func main() {
 	}
 
 	if installSched {
-		requireStateRepo(stateRepo, "--install-scheduler")
+		requireStateRepo(stateRepo, "install-scheduler")
 		validateStateRepoOrExit(stateRepo)
 		if configPath != "" {
 			sticky := stickyConfigFromRun(stateRepo, rootDir, machineID, intervalStr, heartbeatStr, staleTTLStr, redactPaths, gitexec.ResolvedMaxWorkers(maxWorkers))
@@ -273,6 +296,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+		fmt.Println("Migration: re-run install-scheduler after upgrading so the unit/task uses soft command agent.")
 		return
 	}
 
@@ -280,7 +304,7 @@ func main() {
 		// On Windows, Task Scheduler allocates a console for this binary; detach
 		// when we own it so auto-run stays invisible. Interactive terminals are kept.
 		detachAgentConsoleIfOwned()
-		requireStateRepo(stateRepo, "--agent")
+		requireStateRepo(stateRepo, "agent")
 		validateStateRepoOrExit(stateRepo)
 		if flagSet["state-repo"] && configPath != "" {
 			if err := EnsureConfigFromAgent(configPath, stateRepo, rootDir, machineID, intervalStr, heartbeatStr, staleTTLStr, redactPaths); err != nil {
@@ -385,30 +409,43 @@ func printUsage() {
 	fmt.Println("Usage: find-uncommitted [flags] [directory_to_scan]")
 	fmt.Println("       find-uncommitted [flags] check [--json] <path>")
 	fmt.Println("       find-uncommitted [flags] doctor")
+	fmt.Println("       find-uncommitted [flags] agent [directory_to_scan]")
+	fmt.Println("       find-uncommitted [flags] install-scheduler [directory_to_scan]")
+	fmt.Println("       find-uncommitted [flags] uninstall-scheduler")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  find-uncommitted C:\\code")
 	fmt.Println("  find-uncommitted --dirty-only --output results.csv C:\\code")
 	fmt.Println("  find-uncommitted --inventory C:\\code")
 	fmt.Println("  find-uncommitted --state-repo D:\\state-repo C:\\code")
-	fmt.Println("  find-uncommitted --agent --state-repo D:\\state-repo --interval 2m C:\\code")
-	fmt.Println("  find-uncommitted --install-scheduler --state-repo D:\\state-repo C:\\code")
+	fmt.Println("  find-uncommitted --state-repo D:\\state-repo --interval 2m agent C:\\code")
+	fmt.Println("  find-uncommitted --state-repo D:\\state-repo install-scheduler C:\\code")
+	fmt.Println("  find-uncommitted uninstall-scheduler")
 	fmt.Println("  find-uncommitted check ~/repos/work-project")
 	fmt.Println("  find-uncommitted --json check .")
 	fmt.Println("  find-uncommitted --no-remote check .")
 	fmt.Println("  find-uncommitted --print-config")
 	fmt.Println("  find-uncommitted doctor")
 	fmt.Println()
-	fmt.Println("Default tree scan prints a Project x Machine matrix.")
+	fmt.Println("Commands:")
+	fmt.Println("  (default)             Interactive tree scan → Project x Machine matrix")
+	fmt.Println("  check [--json] <path> Pre-flight one repo (exit 0=ok, 2=attention, 1=error)")
+	fmt.Println("  doctor                Operability report (config, locks, scheduler, state repo)")
+	fmt.Println("  agent                 Background publish loop (needs state_repo + scan root)")
+	fmt.Println("  install-scheduler     OS autostart + sticky config + smoke publish")
+	fmt.Println("  uninstall-scheduler   Remove OS autostart registration")
+	fmt.Println()
 	fmt.Println("--inventory / --verbose  Path-centric Full inventory + Attention (former default).")
-	fmt.Println("check [--json] <path>  Pre-flight one repo (exit 0=ok, 2=attention, 1=error).")
-	fmt.Println("  --json  Machine-readable JSON on stdout (schemaVersion 1); warnings stay on stderr.")
+	fmt.Println("  --json  With check: machine-readable JSON on stdout (schemaVersion 1); warnings stay on stderr.")
 	fmt.Println("--print-config  Print resolved settings with sources (flag/env/config/default) and exit.")
-	fmt.Println("doctor  Operability report: config, locks, last publish, scheduler, state-repo health.")
-	fmt.Println("After --install-scheduler, sticky config enables aggregate remotes on bare scans.")
+	fmt.Println("After install-scheduler, sticky config enables aggregate remotes on bare scans.")
 	fmt.Println("Install smoke-publishes one snapshot so you can confirm the state repo works.")
 	fmt.Println("Scan root may come from config when the directory argument is omitted.")
+	fmt.Println("Re-run install-scheduler after upgrading so OS units invoke soft command agent (not --agent).")
 	fmt.Println("Cross-machine sync requires a private Git repository. See README for privacy notes.")
+	fmt.Println()
+	fmt.Println("Flags:")
+	flag.PrintDefaults()
 }
 
 func printPrivacyNotice() {

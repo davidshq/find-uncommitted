@@ -16,7 +16,7 @@ var (
 // detachAgentConsoleIfOwned frees the console when this process is the only one
 // attached (typical for Task Scheduler at-logon). That closes the console window
 // so the agent runs without a visible cmd window. An inherited terminal (user ran
-// `find-uncommitted --agent` interactively) has multiple processes on the console,
+// `find-uncommitted agent` interactively) has multiple processes on the console,
 // so logging stays visible.
 func detachAgentConsoleIfOwned() {
 	var buf [8]uint32

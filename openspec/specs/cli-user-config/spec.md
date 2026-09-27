@@ -29,7 +29,7 @@ The system SHALL apply settings in this order: explicit CLI flags, then environm
 - **THEN** the environment value is used instead of the config file value
 
 ### Requirement: Heartbeat sticky setting
-The system SHALL resolve an optional sticky setting `heartbeat` (duration string) from the user TOML config with the same precedence as other sticky string settings: explicit CLI flags (if any), then environment variables (if defined for this key), then the TOML config file, then the built-in default. When `heartbeat` is unset, the built-in default SHALL be `15m`. The system SHALL persist `heartbeat` when writing sticky config from `--install-scheduler` or first-time agent config creation.
+The system SHALL resolve an optional sticky setting `heartbeat` (duration string) from the user TOML config with the same precedence as other sticky string settings: explicit CLI flags (if any), then environment variables (if defined for this key), then the TOML config file, then the built-in default. When `heartbeat` is unset, the built-in default SHALL be `15m`. The system SHALL persist `heartbeat` when writing sticky config from `install-scheduler` or first-time agent config creation.
 
 #### Scenario: Heartbeat from config
 - **WHEN** the config file contains `heartbeat = "30m"` and no higher-precedence override is set
@@ -44,7 +44,7 @@ The system SHALL resolve an optional sticky setting `heartbeat` (duration string
 - **THEN** the effective heartbeat is 15 minutes
 
 #### Scenario: Install writes heartbeat
-- **WHEN** `--install-scheduler` succeeds
+- **WHEN** `install-scheduler` succeeds
 - **THEN** the sticky config includes a `heartbeat` value
 
 ### Requirement: Calmer default check interval and stale TTL
@@ -74,14 +74,14 @@ When a state repository is in use and both `heartbeat` and `stale_ttl` resolve t
 - **THEN** no stale/heartbeat mismatch warning is printed
 
 ### Requirement: Install and agent persist config
-The system SHALL write or update the user TOML config when `--install-scheduler` succeeds, including at least `state_repo` and `scan_root` from the install invocation, plus the resolved `interval`, `stale_ttl`, and `heartbeat` values (including built-in defaults when those knobs were unset). Agent mode SHALL create the config file if it is missing and `--state-repo` was provided, including the same cadence fields when available.
+The system SHALL write or update the user TOML config when `install-scheduler` succeeds, including at least `state_repo` and `scan_root` from the install invocation, plus the resolved `interval`, `stale_ttl`, and `heartbeat` values (including built-in defaults when those knobs were unset). Agent mode SHALL create the config file if it is missing and `--state-repo` was provided, including the same cadence fields when available.
 
 #### Scenario: Install writes config
-- **WHEN** the user runs `--install-scheduler` with a state repo and scan root
+- **WHEN** the user runs `install-scheduler` with a state repo and scan root
 - **THEN** the config file is created or updated with those values before or as part of scheduler registration
 
 #### Scenario: Install writes cadence knobs
-- **WHEN** `--install-scheduler` succeeds
+- **WHEN** `install-scheduler` succeeds
 - **THEN** the sticky config includes `interval`, `stale_ttl`, and `heartbeat`
 
 #### Scenario: Agent creates missing config
@@ -119,12 +119,12 @@ When sticky config supplies `state_repo` for an interactive scan, the system SHA
 - **THEN** the system prints an error and exits non-zero
 
 ### Requirement: Post-install smoke publish
-When `--install-scheduler` succeeds at writing sticky config, the system SHALL perform one publish attempt to the configured state repository and report the resulting snapshot path before (or as part of) completing install, so the operator can confirm a machine file landed. If that smoke publish fails, the system SHALL exit non-zero without treating the install as fully successful.
+When `install-scheduler` succeeds at writing sticky config, the system SHALL perform one publish attempt to the configured state repository and report the resulting snapshot path before (or as part of) completing install, so the operator can confirm a machine file landed. If that smoke publish fails, the system SHALL exit non-zero without treating the install as fully successful.
 
 #### Scenario: Install smoke publish succeeds
-- **WHEN** the user runs `--install-scheduler` with a valid state repo and scan root
+- **WHEN** the user runs `install-scheduler` with a valid state repo and scan root
 - **THEN** a machine snapshot file is written under `machines/` and the CLI prints its path
 
 #### Scenario: Install smoke publish fails
-- **WHEN** smoke publish cannot write or push the machine snapshot during `--install-scheduler`
+- **WHEN** smoke publish cannot write or push the machine snapshot during `install-scheduler`
 - **THEN** the system reports an error and does not claim a successful install completion

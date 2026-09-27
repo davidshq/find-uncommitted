@@ -22,7 +22,15 @@ When published snapshot content is unchanged, the system SHALL commit and push a
 - **THEN** the system commits and pushes the new snapshot on that tick
 
 ### Requirement: Automatic machine state publishing
-The system SHALL support an autonomous background mode that periodically scans local repositories on the configured check interval and publishes per the heartbeat policy without requiring manual command invocation. The default check interval when unset SHALL be `2m`.
+The system SHALL support an autonomous background mode that periodically scans local repositories on the configured check interval and publishes per the heartbeat policy without requiring manual command invocation. The default check interval when unset SHALL be `2m`. Agent mode SHALL be invocable only as the soft command `find-uncommitted [flags] agent [directory_to_scan]`. Scheduler install and uninstall SHALL be invocable only as soft commands `install-scheduler` and `uninstall-scheduler`. OS scheduler registration SHALL invoke the binary with soft command `agent` (not a mode flag).
+
+#### Scenario: Soft command starts agent
+- **WHEN** the user runs `find-uncommitted --state-repo <path> agent <scan-root>` (or relies on sticky config for those paths)
+- **THEN** the process enters background agent mode
+
+#### Scenario: Soft command installs scheduler
+- **WHEN** the user runs `find-uncommitted --state-repo <path> install-scheduler <scan-root>`
+- **THEN** the system writes sticky config, smoke-publishes, and registers the OS scheduler to run soft command `agent`
 
 #### Scenario: Periodic publish tick
 - **WHEN** agent mode is running and the configured check interval elapses

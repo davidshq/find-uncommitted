@@ -162,7 +162,7 @@ func runAgentTick(ctx context.Context, cfg AgentConfig) {
 	}
 }
 
-// smokePublishOnce runs one scan+publish for --install-scheduler verification.
+// smokePublishOnce runs one scan+publish for install-scheduler verification.
 // Returns the on-disk snapshot path on success so install can print proof the file landed.
 func smokePublishOnce(cfg AgentConfig) (string, error) {
 	cfg.Sync.StateRepoDir = cfg.StateRepoDir

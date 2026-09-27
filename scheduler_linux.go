@@ -27,7 +27,7 @@ func installScheduler(exePath string) error {
 		return fmt.Errorf("create systemd user unit dir: %w", err)
 	}
 
-	execStart := quoteSystemd(exePath) + " --agent"
+	execStart := quoteSystemd(exePath) + " agent"
 
 	content := fmt.Sprintf(`[Unit]
 Description=Find Uncommitted cross-machine state agent

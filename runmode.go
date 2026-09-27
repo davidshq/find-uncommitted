@@ -7,20 +7,90 @@ import (
 	"time"
 )
 
-// argsHasAgentMode reports whether argv requests background agent mode.
-// Used to detach the Windows console before flag parsing so Task Scheduler
-// launches do not flash a terminal window.
+// Soft command verbs (positional after flags), matching check/doctor.
+const (
+	cmdCheck              = "check"
+	cmdDoctor             = "doctor"
+	cmdAgent              = "agent"
+	cmdInstallScheduler   = "install-scheduler"
+	cmdUninstallScheduler = "uninstall-scheduler"
+)
+
+// flagsWhoseNextArgIsValue are string/int flags where the following argv token
+// is a value, not a soft command (e.g. --machine-id agent).
+var flagsWhoseNextArgIsValue = map[string]bool{
+	"--state-repo": true, "-state-repo": true,
+	"--interval": true, "-interval": true,
+	"--heartbeat": true, "-heartbeat": true,
+	"--stale-ttl": true, "-stale-ttl": true,
+	"--tick-timeout": true, "-tick-timeout": true,
+	"--machine-id": true, "-machine-id": true,
+	"--output": true, "-output": true,
+	"--max-workers": true, "-max-workers": true,
+}
+
+// argsHasAgentMode reports whether argv requests background agent mode
+// (soft command agent). Used to detach the Windows console before flag
+// parsing so Task Scheduler launches do not flash a terminal window.
 func argsHasAgentMode(args []string) bool {
-	for _, a := range args {
-		if a == "--agent" || a == "-agent" {
-			return true
+	for i, a := range args {
+		if a != cmdAgent {
+			continue
 		}
-		// flag package accepts -agent=true / --agent=true forms too.
-		if strings.HasPrefix(a, "--agent=") || strings.HasPrefix(a, "-agent=") {
-			return true
+		if i > 0 && flagsWhoseNextArgIsValue[args[i-1]] {
+			continue
 		}
+		return true
 	}
 	return false
+}
+
+// softCommandMode is a positional verb after flags (or empty for a normal scan).
+type softCommandMode string
+
+const (
+	softNone               softCommandMode = ""
+	softCheck              softCommandMode = cmdCheck
+	softDoctor             softCommandMode = cmdDoctor
+	softAgent              softCommandMode = cmdAgent
+	softInstallScheduler   softCommandMode = cmdInstallScheduler
+	softUninstallScheduler softCommandMode = cmdUninstallScheduler
+)
+
+// parseSoftCommand detects check/doctor/agent/install-scheduler/uninstall-scheduler
+// as the first positional arg (same pattern as check). Remaining positionals follow.
+func parseSoftCommand(args []string) (mode softCommandMode, rest []string, err error) {
+	if len(args) == 0 {
+		return softNone, nil, nil
+	}
+	switch args[0] {
+	case cmdCheck:
+		return softCheck, args, nil // check keeps its own arg parser including the verb
+	case cmdDoctor:
+		if len(args) > 1 {
+			return softDoctor, nil, fmt.Errorf("doctor takes no arguments")
+		}
+		return softDoctor, nil, nil
+	case cmdAgent:
+		rest = args[1:]
+		if len(rest) > 1 {
+			return softAgent, nil, fmt.Errorf("agent accepts at most one scan-root argument")
+		}
+		return softAgent, rest, nil
+	case cmdInstallScheduler:
+		rest = args[1:]
+		if len(rest) > 1 {
+			return softInstallScheduler, nil, fmt.Errorf("install-scheduler accepts at most one scan-root argument")
+		}
+		return softInstallScheduler, rest, nil
+	case cmdUninstallScheduler:
+		if len(args) > 1 {
+			return softUninstallScheduler, nil, fmt.Errorf("uninstall-scheduler takes no arguments")
+		}
+		return softUninstallScheduler, nil, nil
+	default:
+		return softNone, args, nil
+	}
 }
 
 // requireStateRepo exits when no state repo is configured for agent/scheduler modes.

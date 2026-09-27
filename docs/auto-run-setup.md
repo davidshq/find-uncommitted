@@ -1,6 +1,6 @@
 # Auto-run setup
 
-Install the OS scheduler so the cross-machine **agent** starts automatically and keeps publishing snapshots in the background. macOS is not supported yet (`--install-scheduler` declines on other platforms).
+Install the OS scheduler so the cross-machine **agent** starts automatically and keeps publishing snapshots in the background. macOS is not supported yet (`install-scheduler` declines on other platforms).
 
 The agent never runs `git commit` / `push` / `pull` on your code repos — it only scans and publishes status into your private **state** repo.
 
@@ -19,7 +19,7 @@ Default install is **while you have a user session**, not “whenever the machin
 
 **Practical effect:** if you change repos over SMB while nobody is logged in, disk state updates but **no snapshot is published** until the agent runs again after logon (or until a Linux linger service is already up). Other machines keep the last heartbeat, then mark the host stale after `stale_ttl`.
 
-There is **no** `--install-scheduler` flag today for “session only” vs “always.” On Linux the always-on path is OS linger (documented below), not a separate scheduler mode. A Windows always-on option is deferred until there is a clear credential story (e.g. deploy key for the state repo only).
+There is **no** `install-scheduler` option today for “session only” vs “always.” On Linux the always-on path is OS linger (documented below), not a separate scheduler mode. A Windows always-on option is deferred until there is a clear credential story (e.g. deploy key for the state repo only).
 
 ## Prerequisites
 
@@ -43,10 +43,10 @@ There is **no** `--install-scheduler` flag today for “session only” vs “al
 
 ```bash
 # Linux
-./binaries/find-uncommitted --install-scheduler --state-repo /path/to/state-clone /path/to/scan/root
+./binaries/find-uncommitted --state-repo /path/to/state-clone install-scheduler /path/to/scan/root
 
 # Windows (PowerShell or cmd)
-.\binaries\find-uncommitted.exe --install-scheduler --state-repo D:\find-uncommitted-state C:\repos
+.\binaries\find-uncommitted.exe --state-repo D:\find-uncommitted-state install-scheduler C:\repos
 ```
 
 On Windows, creating/updating the **at-logon** task often requires an elevated prompt (`Access is denied` without it). Sticky config and smoke publish still run; re-run the elevated task registration if install stops at that step.
@@ -60,7 +60,7 @@ What install does, in order:
 Foreground alternative (no OS registration):
 
 ```bash
-./binaries/find-uncommitted --agent --state-repo /path/to/state-clone /path/to/scan/root
+./binaries/find-uncommitted --state-repo /path/to/state-clone agent /path/to/scan/root
 ```
 
 ### Sticky config locations
@@ -82,7 +82,7 @@ After install, bare scans pick up remotes from this file:
 Install creates and enables:
 
 - Unit: `~/.config/systemd/user/find-uncommitted-agent.service`
-- `ExecStart`: `<absolute-path-to-binary> --agent`
+- `ExecStart`: `<absolute-path-to-binary> agent`
 - `Restart=on-failure` (crash recovery)
 
 Scan roots and intervals come from sticky config, not from the unit file.
@@ -123,7 +123,7 @@ systemctl --user -M youruser@ is-active find-uncommitted-agent.service
 
 If `systemctl --user` is awkward, skip it and confirm a fresh snapshot under `machines/` in the state clone from another computer after a tick (or after reboot with linger on).
 
-Linger is an OS setting, not something `--install-scheduler` toggles. Disable with `loginctl disable-linger $USER` if you want session-only again (that stops headless user services for the account, not only this agent). Ensure non-interactive Git credentials for the state clone still work in that lingering context (e.g. key files readable without an unlocked SSH agent).
+Linger is an OS setting, not something `install-scheduler` toggles. Disable with `loginctl disable-linger $USER` if you want session-only again (that stops headless user services for the account, not only this agent). Ensure non-interactive Git credentials for the state clone still work in that lingering context (e.g. key files readable without an unlocked SSH agent).
 
 ### Verify
 
@@ -145,7 +145,7 @@ Quick operability report (config, locks, last publish, service health):
 ### Uninstall
 
 ```bash
-./binaries/find-uncommitted --uninstall-scheduler
+./binaries/find-uncommitted uninstall-scheduler
 ```
 
 That disables/stops the unit and removes the unit file. Sticky config is left in place so interactive scans still work.
@@ -156,25 +156,25 @@ Install creates:
 
 - Task name: `FindUncommittedAgent`
 - Trigger: **at logon** for the current user (`LogonTrigger`, limited rights)
-- Action: `<absolute-path-to-exe> --agent` (no `.cmd` / VBS wrapper)
+- Action: `<absolute-path-to-exe> agent` (no `.cmd` / VBS wrapper)
 - Settings: `MultipleInstancesPolicy=IgnoreNew` (so `schtasks /Run` is not stuck **Queued**), `ExecutionTimeLimit` disabled (agent may run indefinitely), task marked hidden, `RestartOnFailure` every `1m` up to `999` attempts (crash recovery while the logon session is still up)
 
-At agent start on Windows, if this process is the only one on the console (typical for Task Scheduler), the agent **detaches that console** so no cmd window stays open. Interactive `--agent` in an existing terminal keeps logging visible. Git subprocesses and cancel helpers are created with no console window.
+At agent start on Windows, if this process is the only one on the console (typical for Task Scheduler), the agent **detaches that console** so no cmd window stays open. Interactive `agent` in an existing terminal keeps logging visible. Git subprocesses and cancel helpers are created with no console window.
 
 Cadence (check interval / heartbeat) is owned by the agent loop inside the process, not by a repeating Task Scheduler trigger.
 
-**Session-only (only supported mode):** the task runs in your interactive logon session. It does **not** run at the login screen, after full logout, or when the only access is SMB/SFTP with no Windows logon for this user. There is no linger equivalent in the current installer. For an always-on Windows box you hit mainly over the network, leave a user session logged in (or run `--agent` under a host mechanism you trust with state-repo credentials).
+**Session-only (only supported mode):** the task runs in your interactive logon session. It does **not** run at the login screen, after full logout, or when the only access is SMB/SFTP with no Windows logon for this user. There is no linger equivalent in the current installer. For an always-on Windows box you hit mainly over the network, leave a user session logged in (or run `agent` under a host mechanism you trust with state-repo credentials).
 
-If the agent process exits with a failure while you are still logged in, Task Scheduler restarts it (same idea as Linux `Restart=on-failure`). Clean exit (code 0) does not restart. Re-run `--install-scheduler` after upgrading so older tasks pick up recovery settings.
+If the agent process exits with a failure while you are still logged in, Task Scheduler restarts it (same idea as Linux `Restart=on-failure`). Clean exit (code 0) does not restart. Re-run `install-scheduler` after upgrading so older tasks pick up recovery settings and invoke soft command `agent` (not `--agent`).
 
-After upgrading the binary or moving it, re-run `--install-scheduler` so the task path is rewritten.
+After upgrading the binary or moving it, re-run `install-scheduler` so the task path is rewritten.
 
 Install registers the task for **next logon**; it does not start the agent immediately. To start without logging off:
 
 ```powershell
 schtasks /Run /TN FindUncommittedAgent
 # or
-Start-Process .\binaries\find-uncommitted.exe -ArgumentList "--agent" -WindowStyle Hidden
+Start-Process .\binaries\find-uncommitted.exe -ArgumentList "agent" -WindowStyle Hidden
 ```
 
 Confirm a single process (not a swarm of agents):
@@ -207,14 +207,14 @@ Quick operability report (config, locks, last publish, task/service health):
 ### Uninstall
 
 ```powershell
-.\binaries\find-uncommitted.exe --uninstall-scheduler
+.\binaries\find-uncommitted.exe uninstall-scheduler
 ```
 
 Removes the scheduled task. Sticky config remains.
 
 ## After moving or rebuilding the binary
 
-The unit/task points at the **absolute path** resolved at install time. If you rebuild into a new location (or rename `binaries/`), re-run `--install-scheduler` with the same `--state-repo` and scan root so the unit/task is rewritten.
+The unit/task points at the **absolute path** resolved at install time. If you rebuild into a new location (or rename `binaries/`), re-run `install-scheduler` with the same `--state-repo` and scan root so the unit/task is rewritten.
 
 ## Optional cadence
 
