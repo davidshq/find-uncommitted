@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"find-uncommitted/internal/gitexec"
+	"github.com/davidshq/find-uncommitted/internal/gitexec"
 )
 
 // SyncConfig controls state-repo git operations.

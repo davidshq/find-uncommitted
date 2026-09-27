@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"find-uncommitted/internal/gitexec"
+	"github.com/davidshq/find-uncommitted/internal/gitexec"
 )
 
 // repoOriginURL reads the configured origin remote URL for a repository.

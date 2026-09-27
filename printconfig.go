@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/davidshq/find-uncommitted/internal/gitexec"
 )
 
 // printResolvedConfig writes resolved settings with value sources to w.
@@ -32,7 +34,7 @@ func printResolvedConfig(w io.Writer, configPath string, configExists bool, r Re
 	}
 	printConfigString(w, "tick_timeout", tickTimeout, tickSrc, "default")
 	printConfigBool(w, "redact_paths", r.RedactPaths, r.RedactPathsSource)
-	printConfigInt(w, "max_workers", resolvedMaxWorkers(maxWorkers), r.MaxWorkersSource, DefaultMaxWorkers)
+	printConfigInt(w, "max_workers", gitexec.ResolvedMaxWorkers(maxWorkers), r.MaxWorkersSource, gitexec.DefaultMaxWorkers)
 }
 
 func printConfigString(w io.Writer, key, value string, source ConfigSource, defaultLabel string) {

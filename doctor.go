@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/davidshq/find-uncommitted/internal/gitexec"
 )
 
 const (
@@ -105,7 +107,7 @@ func collectDoctorReport(ctx context.Context, in DoctorInput) doctorReport {
 		r.warn("scan_root unset (interactive scan and agent need a directory or sticky scan_root)")
 	}
 	r.info("interval=%s heartbeat=%s stale_ttl=%s tick_timeout=%s max_workers=%d",
-		in.Interval, in.Heartbeat, in.StaleTTL, in.TickTimeout, resolvedMaxWorkers(in.MaxWorkers))
+		in.Interval, in.Heartbeat, in.StaleTTL, in.TickTimeout, gitexec.ResolvedMaxWorkers(in.MaxWorkers))
 
 	if in.StateRepo == "" {
 		r.warn("state_repo unset (local-only mode; cross-machine sync disabled)")
@@ -140,7 +142,7 @@ func mustParseDoctorDuration(s string) time.Duration {
 }
 
 func checkStateRepoRemote(ctx context.Context, r *doctorReport, stateRepo string) {
-	out, stderr, err := runGit(ctx, stateRepo, "remote", "get-url", "origin")
+	out, stderr, err := gitexec.Run(ctx, stateRepo, "remote", "get-url", "origin")
 	if err != nil {
 		detail := strings.TrimSpace(stderr)
 		if detail == "" {

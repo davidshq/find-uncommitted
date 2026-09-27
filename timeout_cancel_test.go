@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"find-uncommitted/internal/gitexec"
+	"github.com/davidshq/find-uncommitted/internal/gitexec"
 )
 
 func TestCheckRepoStatusRespectsCancel(t *testing.T) {

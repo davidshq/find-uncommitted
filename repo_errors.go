@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"find-uncommitted/internal/gitexec"
+	"github.com/davidshq/find-uncommitted/internal/gitexec"
 )
 
 // isEmptyRepositoryMessage reports whether git output indicates no commits yet.

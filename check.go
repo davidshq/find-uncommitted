@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"find-uncommitted/internal/gitexec"
+	"github.com/davidshq/find-uncommitted/internal/gitexec"
 )
 
 // Exit codes for check mode (full scan still exits 0 on success).

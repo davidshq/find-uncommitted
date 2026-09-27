@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"find-uncommitted/internal/gitexec"
+	"github.com/davidshq/find-uncommitted/internal/gitexec"
 )
 
 // AgentConfig configures the autonomous publish loop.
