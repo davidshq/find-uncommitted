@@ -125,8 +125,6 @@ When config supplies `state_repo`, the CLI prints a short stderr notice and aggr
 
 `--install-scheduler` runs a one-shot **smoke publish** before registering the OS scheduler, then prints the snapshot path so you can confirm a file landed in the state repo.
 
-**Migration:** If you installed the scheduler before sticky config existed, re-run `--install-scheduler` once (or create the TOML file manually). Until then, interactive scans stay local-only unless you pass `--state-repo`.
-
 If your sticky config still has `stale_ttl = "5m"` from an older install, bump it to `30m`, or set an explicit `heartbeat` so `stale_ttl` is at least ~2× it (e.g. `heartbeat = "2m"` with `stale_ttl = "5m"`). Newer defaults use a `15m` heartbeat when unset; leaving `stale_ttl` at `5m` makes healthy machines look stale for most of each heartbeat window.
 
 ### Privacy warning
@@ -405,18 +403,19 @@ GOOS=linux GOARCH=amd64 go build -o binaries/fix-ownership ./fix-ownership-tool
 
 ## How it works
 
-1. **Directory Scanning**: Uses `filepath.Walk` to recursively scan the specified directory
+1. **Directory Scanning**: Uses `filepath.Walk` via `internal/discover` to recursively scan the specified directory
 2. **Git Detection**: Looks for `.git` entries to identify git repositories — a `.git` **directory** (normal clone) or a `.git` **file** (linked worktree or submodule), so worktrees are scanned too
-3. **Status Checking**: For each repository found, runs git commands to check:
+3. **Git execution**: All scan/sync git subprocesses go through `internal/gitexec` (per-command deadlines, cancel, non-interactive env)
+4. **Status Checking**: For each repository found, runs git commands to check:
    - Current branch and short HEAD SHA
    - Unstaged changes (`git diff --name-only`)
    - Staged changes (`git diff --cached --name-only`)
    - Untracked files (`git ls-files --others --exclude-standard`)
    - Ahead of upstream (`git rev-list --count @{u}..HEAD`) when tracking exists
    - Behind upstream (`git rev-list --count HEAD..@{u}`) against cached tracking refs (no automatic fetch)
-4. **Concurrent Processing**: Uses goroutines to check multiple repositories simultaneously
-5. **Attention + inventory**: Builds soft situation nudges, then displays a formatted inventory (and optional CSV)
-6. **Error Handling**: Provides specific guidance for common Git issues like ownership problems
+5. **Concurrent Processing**: Uses goroutines to check multiple repositories simultaneously
+6. **Attention + inventory**: Builds soft situation nudges, then displays a formatted inventory (and optional CSV)
+7. **Error Handling**: Provides specific guidance for common Git issues like ownership problems
 
 ## Performance Notes
 

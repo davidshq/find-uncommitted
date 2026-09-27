@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Bound every git subprocess used for repository scanning and state-repository sync with cancellable contexts and deadlines so hung credential prompts or stuck network git cannot block the agent or interactive scans indefinitely.
+Bound every git subprocess used for repository scanning and state-repository sync with cancellable contexts and deadlines so hung credential prompts or stuck network git cannot block the agent or interactive scans indefinitely. Shared execution lives in `internal/gitexec` (timeouts, process-group/tree cancel, non-interactive env, stderr formatting).
 
 ## Requirements
 

@@ -67,11 +67,11 @@ const clear: FolderOutcome = {
 };
 
 describe("parseAttentionDisplay", () => {
-  it("defaults unknown and legacy banner to notification", () => {
+  it("defaults unknown values to notification", () => {
     assert.equal(parseAttentionDisplay(undefined), "notification");
-    assert.equal(parseAttentionDisplay("banner"), "notification");
     assert.equal(parseAttentionDisplay("notification"), "notification");
     assert.equal(parseAttentionDisplay("statusBar"), "statusBar");
+    assert.equal(parseAttentionDisplay("other"), "notification");
   });
 });
 

@@ -8,12 +8,14 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"find-uncommitted/internal/gitexec"
 )
 
 // repoOriginURL reads the configured origin remote URL for a repository.
 // Missing origin is not an error — local-only repos simply have no correlation URL.
 func repoOriginURL(ctx context.Context, repoPath string) string {
-	out, _, err := runGit(ctx, repoPath, "remote", "get-url", "origin")
+	out, _, err := gitexec.Run(ctx, repoPath, "remote", "get-url", "origin")
 	if err != nil {
 		return ""
 	}

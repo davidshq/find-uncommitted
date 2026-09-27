@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"find-uncommitted/internal/discover"
+	"find-uncommitted/internal/gitexec"
 )
 
 var debugMode bool
@@ -58,7 +59,7 @@ func main() {
 	flag.BoolVar(&uninstallSched, "uninstall-scheduler", false, "Remove OS scheduler registration")
 	flag.BoolVar(&redactPaths, "redact-paths", false, "Redact full paths in published snapshots (keep basename)")
 	flag.BoolVar(&skipRemote, "no-remote", false, "Skip loading other machines' snapshots even if state repo is configured")
-	flag.IntVar(&maxWorkers, "max-workers", 0, fmt.Sprintf("Max parallel repo checks (default %d; 0 = default)", DefaultMaxWorkers))
+	flag.IntVar(&maxWorkers, "max-workers", 0, fmt.Sprintf("Max parallel repo checks (default %d; 0 = default)", gitexec.DefaultMaxWorkers))
 	var jsonOutput bool
 	flag.BoolVar(&jsonOutput, "json", false, "With check: print machine-readable JSON to stdout (human text remains default)")
 	flag.Parse()
@@ -213,7 +214,7 @@ func main() {
 		requireStateRepo(stateRepo, "--install-scheduler")
 		validateStateRepoOrExit(stateRepo)
 		if configPath != "" {
-			sticky := stickyConfigFromRun(stateRepo, rootDir, machineID, intervalStr, heartbeatStr, staleTTLStr, redactPaths, resolvedMaxWorkers(maxWorkers))
+			sticky := stickyConfigFromRun(stateRepo, rootDir, machineID, intervalStr, heartbeatStr, staleTTLStr, redactPaths, gitexec.ResolvedMaxWorkers(maxWorkers))
 			if err := SaveUserConfig(configPath, sticky); err != nil {
 				fmt.Fprintf(os.Stderr, "Error writing sticky config: %v\n", err)
 				os.Exit(1)
@@ -238,7 +239,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Println("Migration: existing unit-only installs should re-run --install-scheduler once so sticky config is created.")
 		return
 	}
 
@@ -422,7 +422,7 @@ func gitCancelledError(err error) string {
 }
 
 func setGitCancelled(ctx context.Context, status *RepoSnapshot, err error) bool {
-	if isGitContextErr(ctx, err) {
+	if gitexec.IsContextErr(ctx, err) {
 		status.Error = gitCancelledError(err)
 		return true
 	}
@@ -432,7 +432,7 @@ func setGitCancelled(ctx context.Context, status *RepoSnapshot, err error) bool 
 // gitWorkingTreeNonempty runs a git command whose nonempty stdout means a working-tree signal.
 // ok is false when the status check should abort (cancel or hard error already recorded).
 func gitWorkingTreeNonempty(ctx context.Context, repoPath string, status *RepoSnapshot, failPrefix, shortMsg string, args ...string) (ok, nonempty bool) {
-	out, stderr, err := runGit(ctx, repoPath, args...)
+	out, stderr, err := gitexec.Run(ctx, repoPath, args...)
 	if err != nil {
 		if setGitCancelled(ctx, status, err) {
 			return false, false
@@ -454,7 +454,7 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoSnapshot {
 	}
 
 	// First check if this is a valid git repository
-	_, stderr, err := runGit(ctx, repoPath, "rev-parse", "--git-dir")
+	_, stderr, err := gitexec.Run(ctx, repoPath, "rev-parse", "--git-dir")
 	if err != nil {
 		if setGitCancelled(ctx, &status, err) {
 			return status
@@ -469,7 +469,7 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoSnapshot {
 	}
 
 	// Get current branch
-	branch, stderr, err := runGit(ctx, repoPath, "branch", "--show-current")
+	branch, stderr, err := gitexec.Run(ctx, repoPath, "branch", "--show-current")
 	if err != nil {
 		if setGitCancelled(ctx, &status, err) {
 			return status
@@ -477,18 +477,18 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoSnapshot {
 		// Check if it's a detached HEAD state (exit code 1)
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			// Try to get the commit hash instead
-			commit, _, commitErr := runGit(ctx, repoPath, "rev-parse", "--short", "HEAD")
+			commit, _, commitErr := gitexec.Run(ctx, repoPath, "rev-parse", "--short", "HEAD")
 			if commitErr == nil {
 				status.Branch = fmt.Sprintf("detached HEAD (%s)", strings.TrimSpace(commit))
 			} else if setGitCancelled(ctx, &status, commitErr) {
 				return status
 			} else {
 				status.Branch = "detached HEAD"
-				status.Error = fmt.Sprintf("Branch issue: %s", formatGitError(stderr, err))
+				status.Error = fmt.Sprintf("Branch issue: %s", gitexec.FormatError(stderr, err))
 			}
 		} else {
 			status.Branch = "unknown"
-			status.Error = fmt.Sprintf("Branch issue: %s", formatGitError(stderr, err))
+			status.Error = fmt.Sprintf("Branch issue: %s", gitexec.FormatError(stderr, err))
 		}
 		// Don't return here, continue checking other status
 	} else {
@@ -526,7 +526,7 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoSnapshot {
 
 	// Upstream tracking (skip for empty repositories).
 	if !status.IsEmpty {
-		_, upStderr, upstreamErr := runGit(ctx, repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+		_, upStderr, upstreamErr := gitexec.Run(ctx, repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
 		if upstreamErr != nil {
 			if setGitCancelled(ctx, &status, upstreamErr) {
 				return status
@@ -559,7 +559,7 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoSnapshot {
 
 // revListCount runs `git rev-list --count <range>` and returns 0 on any failure.
 func revListCount(ctx context.Context, repoPath, revRange string) int {
-	out, _, err := runGit(ctx, repoPath, "rev-list", "--count", revRange)
+	out, _, err := gitexec.Run(ctx, repoPath, "rev-list", "--count", revRange)
 	if err != nil {
 		if debugMode {
 			fmt.Printf("[DEBUG] Failed rev-list %s in %s: %v\n", revRange, repoPath, err)
@@ -578,7 +578,7 @@ func revListCount(ctx context.Context, repoPath, revRange string) int {
 
 // shortHeadSHA returns a short HEAD commit hash, or empty when unavailable.
 func shortHeadSHA(ctx context.Context, repoPath string) string {
-	out, _, err := runGit(ctx, repoPath, "rev-parse", "--short", "HEAD")
+	out, _, err := gitexec.Run(ctx, repoPath, "rev-parse", "--short", "HEAD")
 	if err != nil {
 		return ""
 	}

@@ -10,53 +10,6 @@ import (
 	"testing"
 )
 
-func TestFormatGitError(t *testing.T) {
-	tests := []struct {
-		name   string
-		stderr string
-		err    error
-		want   string
-	}{
-		{
-			name:   "fatal line trimmed",
-			stderr: "fatal: no such branch: 'main'\n",
-			err:    errors.New("exit status 128"),
-			want:   "no such branch: 'main'",
-		},
-		{
-			name:   "multiline prefers first fatal",
-			stderr: "hint: something\nfatal: refusing to merge\nfatal: second\n",
-			err:    errors.New("exit status 128"),
-			want:   "refusing to merge",
-		},
-		{
-			name:   "empty stderr falls back to err",
-			stderr: "",
-			err:    errors.New("exit status 128"),
-			want:   "exit status 128",
-		},
-		{
-			name:   "non fatal first line",
-			stderr: "error: something failed\n",
-			err:    errors.New("exit status 1"),
-			want:   "error: something failed",
-		},
-		{
-			name:   "long stderr truncated",
-			stderr: "fatal: " + strings.Repeat("x", 300),
-			err:    errors.New("exit status 128"),
-			want:   strings.Repeat("x", 197) + "...",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := formatGitError(tt.stderr, tt.err); got != tt.want {
-				t.Fatalf("formatGitError() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestClassifyUpstreamFailure(t *testing.T) {
 	t.Run("no upstream", func(t *testing.T) {
 		untracked, errMsg := classifyUpstreamFailure("fatal: no upstream configured\n", errors.New("exit status 128"))

@@ -160,7 +160,7 @@ Cadence (check interval / heartbeat) is owned by the agent loop inside the proce
 
 Unlike Linux systemd, the Windows task does **not** auto-restart the process on crash; log out/in (or start the task again) if the agent exits.
 
-After upgrading the binary or moving it, re-run `--install-scheduler` so the task path is rewritten (and any legacy `agent-launcher.cmd` is removed).
+After upgrading the binary or moving it, re-run `--install-scheduler` so the task path is rewritten.
 
 Install registers the task for **next logon**; it does not start the agent immediately. To start without logging off:
 
@@ -196,7 +196,7 @@ Confirm a snapshot under `machines\` in the state clone after a tick.
 .\binaries\find-uncommitted.exe --uninstall-scheduler
 ```
 
-Removes the scheduled task and any legacy `agent-launcher.cmd`. Sticky config remains.
+Removes the scheduled task. Sticky config remains.
 
 ## After moving or rebuilding the binary
 

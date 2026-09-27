@@ -10,6 +10,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"find-uncommitted/internal/gitexec"
 )
 
 // AgentConfig configures the autonomous publish loop.
@@ -209,7 +211,7 @@ func checkRepoStatuses(ctx context.Context, repos []string, dirtyOnlyFilter bool
 		return nil
 	}
 
-	maxWorkers = repoCheckWorkerCount(maxWorkers, len(repos))
+	maxWorkers = gitexec.RepoCheckWorkerCount(maxWorkers, len(repos))
 
 	jobs := make(chan string)
 	statusChan := make(chan RepoSnapshot, len(repos))

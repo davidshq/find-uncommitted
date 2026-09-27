@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"find-uncommitted/internal/gitexec"
 )
 
 // SyncConfig controls state-repo git operations.
@@ -19,14 +21,14 @@ type SyncConfig struct {
 	// published UpdatedAt is older than this, so remote views stay fresh.
 	// Zero means DefaultHeartbeat. Sticky config key: heartbeat.
 	Heartbeat time.Duration
-	Runner    GitRunner
+	Runner    gitexec.GitRunner
 }
 
-func (c SyncConfig) runner() GitRunner {
+func (c SyncConfig) runner() gitexec.GitRunner {
 	if c.Runner != nil {
 		return c.Runner
 	}
-	return ExecGitRunner{}
+	return gitexec.ExecGitRunner{}
 }
 
 func (c SyncConfig) retries() int {
@@ -213,7 +215,7 @@ func rebaseAndPush(ctx context.Context, cfg SyncConfig) error {
 				Message: "state repo rebase before push failed",
 				Err:     fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr)),
 			}
-			if isGitContextErr(ctx, err) {
+			if gitexec.IsContextErr(ctx, err) {
 				return lastErr
 			}
 			time.Sleep(cfg.delay())
@@ -224,7 +226,7 @@ func rebaseAndPush(ctx context.Context, cfg SyncConfig) error {
 				Message: "state repo push failed",
 				Err:     fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr)),
 			}
-			if isGitContextErr(ctx, err) {
+			if gitexec.IsContextErr(ctx, err) {
 				return lastErr
 			}
 			time.Sleep(cfg.delay())

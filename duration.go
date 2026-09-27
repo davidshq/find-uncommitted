@@ -7,13 +7,13 @@ import (
 
 // Duration defaults are defined once as Go duration strings; typed values are
 // derived so flags, sticky config, and runtime cannot drift.
+// Per-command git timeouts live in internal/gitexec.
 
 const (
-	DefaultIntervalString          = "2m"
-	DefaultHeartbeatString         = "15m"
-	DefaultStaleTTLString          = "30m"
-	DefaultTickTimeoutString       = "2m"
-	DefaultGitCommandTimeoutString = "30s"
+	DefaultIntervalString    = "2m"
+	DefaultHeartbeatString   = "15m"
+	DefaultStaleTTLString    = "30m"
+	DefaultTickTimeoutString = "2m"
 )
 
 var (
@@ -29,9 +29,6 @@ var (
 
 	// DefaultAgentTickTimeout bounds one agent publish tick (pull + scan + publish).
 	DefaultAgentTickTimeout = mustDuration(DefaultTickTimeoutString)
-
-	// DefaultGitCommandTimeout bounds a single git subprocess.
-	DefaultGitCommandTimeout = mustDuration(DefaultGitCommandTimeoutString)
 )
 
 func mustDuration(s string) time.Duration {

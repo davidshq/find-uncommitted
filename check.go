@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"find-uncommitted/internal/gitexec"
 )
 
 // Exit codes for check mode (full scan still exits 0 on success).
@@ -35,7 +37,7 @@ func resolveGitToplevel(ctx context.Context, path string) (string, error) {
 	if !info.IsDir() {
 		dir = filepath.Dir(abs)
 	}
-	out, stderr, err := runGit(ctx, dir, "rev-parse", "--show-toplevel")
+	out, stderr, err := gitexec.Run(ctx, dir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		detail := strings.TrimSpace(stderr)
 		if detail == "" {

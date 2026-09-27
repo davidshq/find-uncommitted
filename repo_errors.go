@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"find-uncommitted/internal/gitexec"
 )
 
 // isEmptyRepositoryMessage reports whether git output indicates no commits yet.
@@ -21,11 +23,11 @@ func isEmptyRepositoryMessage(stderr string, err error) bool {
 
 // repoIsEmpty returns true when the repository has no commits yet.
 func repoIsEmpty(ctx context.Context, repoPath string) bool {
-	_, stderr, err := runGit(ctx, repoPath, "rev-parse", "--verify", "HEAD")
+	_, stderr, err := gitexec.Run(ctx, repoPath, "rev-parse", "--verify", "HEAD")
 	if err == nil {
 		return false
 	}
-	if isGitContextErr(ctx, err) {
+	if gitexec.IsContextErr(ctx, err) {
 		return false
 	}
 	return isEmptyRepositoryMessage(stderr, err)
@@ -38,11 +40,11 @@ func classifyUpstreamFailure(stderr string, err error) (untrackedUpstream bool, 
 	if strings.Contains(combined, "no upstream configured") {
 		return true, ""
 	}
-	return false, "Failed to check upstream tracking: " + formatGitError(stderr, err)
+	return false, "Failed to check upstream tracking: " + gitexec.FormatError(stderr, err)
 }
 
 func invalidRepositoryError(stderr string, err error) string {
-	detail := formatGitError(stderr, err)
+	detail := gitexec.FormatError(stderr, err)
 	if detail == "" || detail == "unknown git error" {
 		return "Not a valid git repository"
 	}
@@ -54,7 +56,7 @@ func appendRepoCheckError(status *RepoSnapshot, stderr string, err error, primar
 	if status.Error != "" {
 		label = followUp
 	}
-	fragment := fmt.Sprintf("%s: %s", label, formatGitError(stderr, err))
+	fragment := fmt.Sprintf("%s: %s", label, gitexec.FormatError(stderr, err))
 	if status.Error == "" {
 		status.Error = fragment
 	} else {

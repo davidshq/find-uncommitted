@@ -15,22 +15,6 @@ import (
 
 const schedulerTaskName = "FindUncommittedAgent"
 
-// legacyAgentLauncherPath is the old .cmd wrapper path; removed on install/uninstall
-// after switching the task to invoke the exe directly.
-func legacyAgentLauncherPath() (string, error) {
-	base, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(base, "find-uncommitted", "agent-launcher.cmd"), nil
-}
-
-func removeLegacyAgentLauncher() {
-	if p, err := legacyAgentLauncherPath(); err == nil {
-		_ = os.Remove(p)
-	}
-}
-
 // installScheduler registers an at-logon task that runs the exe with --agent.
 // The agent detaches its console when it owns it (see detachAgentConsoleIfOwned),
 // so no visible cmd window stays open. Scan settings come from sticky config.
@@ -38,8 +22,6 @@ func removeLegacyAgentLauncher() {
 // Task XML sets MultipleInstancesPolicy=IgnoreNew (so /Run is not stuck Queued
 // behind a phantom instance) and ExecutionTimeLimit=PT0S (no 72h kill).
 func installScheduler(exePath string) error {
-	removeLegacyAgentLauncher()
-
 	userID, err := windowsTaskUserID()
 	if err != nil {
 		return fmt.Errorf("resolve task user: %w", err)
@@ -67,7 +49,6 @@ func uninstallScheduler() error {
 	if err != nil {
 		return fmt.Errorf("uninstall Windows task: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
-	removeLegacyAgentLauncher()
 	fmt.Printf("Removed Windows scheduled task %q.\n", schedulerTaskName)
 	return nil
 }

@@ -3,7 +3,6 @@ import { CROSS_MACHINE_KINDS, FolderOutcome } from "./types";
 /**
  * How to surface cross-machine attention.
  * Default is the usual VS Code warning notification (`showWarningMessage`).
- * Legacy setting value `"banner"` is accepted as an alias of `"notification"`.
  */
 export type AttentionDisplay = "notification" | "statusBar";
 
@@ -13,12 +12,12 @@ export const NOTIFICATION_ACTIONS = {
   dismiss: "Dismiss",
 } as const;
 
-/** Normalize config / legacy values to AttentionDisplay. */
+/** Normalize config values to AttentionDisplay. */
 export function parseAttentionDisplay(raw: string | undefined): AttentionDisplay {
   if (raw === "statusBar") {
     return "statusBar";
   }
-  // "notification", legacy "banner", unset, or unknown → notification
+  // "notification", unset, or unknown → notification
   return "notification";
 }
 
