@@ -73,7 +73,8 @@ Local-only dirty stays on the status bar. Switch to `"statusBar"` if you want th
 
 - **FU · ok** — quiet clear  
 - **FU · dirty** — local attention only  
+- **⚠ FU · error** — check/CLI failure (timeout, bad exit); not unfinished work  
 - **⚠ FU · \<machine\>** — elevated cross-machine attention  
-- **FU · setup** — binary missing  
+- **⚠ FU · setup** — binary missing  
 
 No OS notifications; no commit/push/pull from the extension.

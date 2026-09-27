@@ -4,6 +4,7 @@ export type StatusTier =
   | "hidden"
   | "clear"
   | "local"
+  | "error"
   | "cross"
   | "setup"
   | "checking";
@@ -15,10 +16,10 @@ export function tierFromOutcomes(outcomes: FolderOutcome[]): StatusTier {
   if (outcomes.some((o) => o.kind === "attention" && o.elevated)) {
     return "cross";
   }
-  if (outcomes.some((o) => o.kind === "attention")) {
-    return "local";
-  }
   if (outcomes.some((o) => o.kind === "error")) {
+    return "error";
+  }
+  if (outcomes.some((o) => o.kind === "attention")) {
     return "local";
   }
   const checked = outcomes.filter(

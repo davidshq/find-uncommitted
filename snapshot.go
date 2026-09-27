@@ -30,8 +30,8 @@ type RepoSnapshot struct {
 	HasUnpushed          bool   `json:"has_unpushed"`
 	HasBehind            bool   `json:"has_behind,omitempty"`
 	HasUntrackedUpstream bool   `json:"has_untracked_upstream"`
-	AheadCount           int    `json:"ahead_count,omitempty"`  // commits ahead of upstream (0 if none/unknown)
-	BehindCount          int    `json:"behind_count,omitempty"` // commits behind upstream (0 if none/unknown)
+	AheadCount           int    `json:"ahead_count,omitempty"`  // commits ahead of upstream; failures set Error instead of inventing 0
+	BehindCount          int    `json:"behind_count,omitempty"` // commits behind upstream; failures set Error instead of inventing 0
 	HeadSHA              string `json:"head_sha,omitempty"`     // fixed --short=12 HEAD SHA; compare via headSHAsEqual
 	IsDirty              bool   `json:"is_dirty"`
 	IsClean              bool   `json:"is_clean"`

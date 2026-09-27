@@ -52,6 +52,14 @@ export function applyStatusBar(
       item.backgroundColor = undefined;
       item.show();
       return;
+    case "error":
+      item.text = "$(warning) FU · error";
+      item.tooltip = tooltipFromOutcomes(outcomes);
+      item.backgroundColor = new vscode.ThemeColor(
+        "statusBarItem.warningBackground"
+      );
+      item.show();
+      return;
     case "clear":
       item.text = "FU · ok";
       item.tooltip = tooltipFromOutcomes(outcomes);

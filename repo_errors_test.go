@@ -56,6 +56,38 @@ func TestCheckRepoStatusEmptyRepository(t *testing.T) {
 	}
 }
 
+func TestRevListCountFailureReturnsError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	n, _, err := revListCount(ctx, t.TempDir(), "@{u}..HEAD")
+	if err == nil {
+		t.Fatal("expected error from cancelled rev-list")
+	}
+	if n != 0 {
+		t.Fatalf("count=%d, want 0 on failure", n)
+	}
+}
+
+func TestFillAheadBehindFailureSetsErrorNotCleanFlags(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	st := RepoSnapshot{}
+	fillAheadBehind(ctx, &st, t.TempDir())
+	if st.Error == "" {
+		t.Fatal("expected Error when rev-list fails")
+	}
+	if !strings.Contains(st.Error, "timed out or cancelled") && !strings.Contains(st.Error, "ahead") {
+		t.Fatalf("unexpected Error %q", st.Error)
+	}
+	if st.HasUnpushed || st.HasBehind || st.AheadCount != 0 || st.BehindCount != 0 {
+		t.Fatalf("failure must not invent ahead/behind signal: %+v", st)
+	}
+	st.IsClean = st.Error == "" && !st.HasUnpushed && !st.HasBehind
+	if st.IsClean {
+		t.Fatal("failed rev-list must not leave IsClean true")
+	}
+}
+
 func TestCheckRepoStatusWaitDelayNotInvalidRepo(t *testing.T) {
 	st := RepoSnapshot{}
 	if !setGitCancelled(context.Background(), &st, exec.ErrWaitDelay) {

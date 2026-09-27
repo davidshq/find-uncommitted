@@ -619,10 +619,7 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoSnapshot {
 			}
 		} else {
 			// Ahead/behind against cached upstream refs only (no fetch).
-			status.AheadCount = revListCount(ctx, repoPath, "@{u}..HEAD")
-			status.BehindCount = revListCount(ctx, repoPath, "HEAD..@{u}")
-			status.HasUnpushed = status.AheadCount > 0
-			status.HasBehind = status.BehindCount > 0
+			fillAheadBehind(ctx, &status, repoPath)
 		}
 	}
 
@@ -633,23 +630,47 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoSnapshot {
 	return status
 }
 
-// revListCount runs `git rev-list --count <range>` and returns 0 on any failure.
-func revListCount(ctx context.Context, repoPath, revRange string) int {
-	out, _, err := gitexec.Run(ctx, repoPath, "rev-list", "--count", revRange)
+// fillAheadBehind sets AheadCount/BehindCount (and flags) from rev-list.
+// Failures set Error — never treat unknown counts as zero/clean.
+func fillAheadBehind(ctx context.Context, status *RepoSnapshot, repoPath string) {
+	if n, stderr, err := revListCount(ctx, repoPath, "@{u}..HEAD"); err != nil {
+		if setGitCancelled(ctx, status, err) {
+			return
+		}
+		appendRepoCheckError(status, stderr, err, "Failed to count commits ahead of upstream", "ahead count failed")
+	} else {
+		status.AheadCount = n
+		status.HasUnpushed = n > 0
+	}
+	if n, stderr, err := revListCount(ctx, repoPath, "HEAD..@{u}"); err != nil {
+		if setGitCancelled(ctx, status, err) {
+			return
+		}
+		appendRepoCheckError(status, stderr, err, "Failed to count commits behind upstream", "behind count failed")
+	} else {
+		status.BehindCount = n
+		status.HasBehind = n > 0
+	}
+}
+
+// revListCount runs `git rev-list --count <range>`. On failure it returns err
+// (and stderr) so callers can surface unknown ahead/behind instead of 0.
+func revListCount(ctx context.Context, repoPath, revRange string) (count int, stderr string, err error) {
+	out, stderr, err := gitexec.Run(ctx, repoPath, "rev-list", "--count", revRange)
 	if err != nil {
 		if debugMode {
 			fmt.Printf("[DEBUG] Failed rev-list %s in %s: %v\n", revRange, repoPath, err)
 		}
-		return 0
+		return 0, stderr, err
 	}
-	count, err := strconv.Atoi(strings.TrimSpace(out))
+	count, err = strconv.Atoi(strings.TrimSpace(out))
 	if err != nil {
 		if debugMode {
 			fmt.Printf("[DEBUG] Failed to parse rev-list count in %s: %v\n", repoPath, err)
 		}
-		return 0
+		return 0, "", fmt.Errorf("unexpected rev-list output %q: %w", out, err)
 	}
-	return count
+	return count, "", nil
 }
 
 // shortHeadSHALen is the fixed abbrev length for published HeadSHA values.

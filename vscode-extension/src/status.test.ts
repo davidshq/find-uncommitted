@@ -53,12 +53,32 @@ describe("tierFromOutcomes", () => {
     assert.equal(tierFromOutcomes([localAtt]), "local");
   });
 
-  it("returns local for errors", () => {
+  it("returns error tier for check failures (not dirty)", () => {
     assert.equal(
       tierFromOutcomes([
         { kind: "error", folder: "/a", message: "boom", stderr: "detail" },
       ]),
-      "local"
+      "error"
+    );
+  });
+
+  it("prefers error over local dirty", () => {
+    assert.equal(
+      tierFromOutcomes([
+        localAtt,
+        { kind: "error", folder: "/b", message: "timed out" },
+      ]),
+      "error"
+    );
+  });
+
+  it("prefers cross over error", () => {
+    assert.equal(
+      tierFromOutcomes([
+        crossAtt,
+        { kind: "error", folder: "/b", message: "timed out" },
+      ]),
+      "cross"
     );
   });
 

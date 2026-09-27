@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -95,6 +97,89 @@ func TestCommitAndPushRetriesThenSucceeds(t *testing.T) {
 	}
 	if pulls < 2 || pushes != 1 {
 		t.Fatalf("expected retry then success; pulls=%d pushes=%d calls=%v", pulls, pushes, g.calls)
+	}
+}
+
+func TestRebaseAndPushAbortsStuckRebaseBeforeRetry(t *testing.T) {
+	dir := t.TempDir()
+	rebaseDir := filepath.Join(dir, ".git", "rebase-merge")
+	if err := os.MkdirAll(rebaseDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	g := newScriptedGit()
+	// Entry abort (stuck clone) → failed pull → post-fail abort → retry pull → push.
+	g.enqueue("rebase", gitResult{})
+	g.enqueue("pull", gitResult{err: errors.New("conflict"), stderr: "could not apply"})
+	g.enqueue("rebase", gitResult{})
+	g.enqueue("pull", gitResult{})
+	g.enqueue("push", gitResult{})
+
+	cfg := SyncConfig{
+		StateRepoDir: dir,
+		MachineID:    "box",
+		MaxRetries:   3,
+		RetryDelay:   time.Millisecond,
+		Runner: &rebaseMarkerGit{inner: g, rebaseDir: rebaseDir},
+	}
+	if err := rebaseAndPush(context.Background(), cfg); err != nil {
+		t.Fatalf("rebaseAndPush: %v", err)
+	}
+
+	var aborts, pulls, pushes int
+	for _, c := range g.calls {
+		switch {
+		case len(c) >= 2 && c[0] == "rebase" && c[1] == "--abort":
+			aborts++
+		case len(c) >= 1 && c[0] == "pull":
+			pulls++
+		case len(c) >= 1 && c[0] == "push":
+			pushes++
+		}
+	}
+	if aborts != 2 || pulls != 2 || pushes != 1 {
+		t.Fatalf("expected abort-before-retry; aborts=%d pulls=%d pushes=%d calls=%v", aborts, pulls, pushes, g.calls)
+	}
+}
+
+// rebaseMarkerGit keeps .git/rebase-merge in sync with scripted rebase/pull outcomes
+// so abortRebaseIfInProgress's filesystem probe matches real git behavior.
+type rebaseMarkerGit struct {
+	inner     *scriptedGit
+	rebaseDir string
+}
+
+func (r *rebaseMarkerGit) Run(ctx context.Context, dir string, args ...string) (string, string, error) {
+	stdout, stderr, err := r.inner.Run(ctx, dir, args...)
+	switch {
+	case len(args) >= 2 && args[0] == "rebase" && args[1] == "--abort" && err == nil:
+		_ = os.RemoveAll(r.rebaseDir)
+	case len(args) >= 1 && args[0] == "pull" && err != nil:
+		_ = os.MkdirAll(r.rebaseDir, 0o755)
+	}
+	return stdout, stderr, err
+}
+
+func TestPullStateRepoAbortsStuckRebase(t *testing.T) {
+	dir := t.TempDir()
+	rebaseDir := filepath.Join(dir, ".git", "rebase-merge")
+	if err := os.MkdirAll(rebaseDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g := newScriptedGit()
+	g.enqueue("rebase", gitResult{})
+	g.enqueue("pull", gitResult{})
+
+	err := PullStateRepo(context.Background(), SyncConfig{
+		StateRepoDir: dir,
+		Runner:       &rebaseMarkerGit{inner: g, rebaseDir: rebaseDir},
+		RetryDelay:   time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("PullStateRepo: %v", err)
+	}
+	if len(g.calls) < 2 || g.calls[0][0] != "rebase" || g.calls[1][0] != "pull" {
+		t.Fatalf("expected abort then pull; calls=%v", g.calls)
 	}
 }
 

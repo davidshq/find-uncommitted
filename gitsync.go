@@ -83,8 +83,13 @@ func PullStateRepo(ctx context.Context, cfg SyncConfig) error {
 
 func pullStateRepoLocked(ctx context.Context, cfg SyncConfig) error {
 	r := cfg.runner()
+	if err := abortRebaseIfInProgress(ctx, cfg); err != nil {
+		return err
+	}
 	_, stderr, err := r.Run(ctx, cfg.StateRepoDir, "pull", "--rebase", "--autostash")
 	if err != nil {
+		// Leave the clone usable for the next tick when pull --rebase stalls mid-rebase.
+		_ = abortRebaseIfInProgress(ctx, cfg)
 		return SyncWarning{
 			Message: "state repo pull failed (will retry later)",
 			Err:     fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr)),
@@ -287,16 +292,28 @@ func rebaseAndPush(ctx context.Context, cfg SyncConfig) error {
 	var lastErr error
 	for attempt := 1; attempt <= cfg.retries(); attempt++ {
 		if err := ctx.Err(); err != nil {
+			_ = abortRebaseIfInProgress(ctx, cfg)
 			return SyncWarning{
 				Message: "state repo sync cancelled",
 				Err:     err,
 			}
+		}
+		// A prior failed pull --rebase can leave the state clone mid-rebase;
+		// abort before retrying so publishes self-recover instead of sticking.
+		if err := abortRebaseIfInProgress(ctx, cfg); err != nil {
+			lastErr = err
+			if gitexec.IsContextErr(ctx, err) {
+				return lastErr
+			}
+			time.Sleep(cfg.delay())
+			continue
 		}
 		if _, stderr, err := r.Run(ctx, cfg.StateRepoDir, "pull", "--rebase", "--autostash"); err != nil {
 			lastErr = SyncWarning{
 				Message: "state repo rebase before push failed",
 				Err:     fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr)),
 			}
+			_ = abortRebaseIfInProgress(ctx, cfg)
 			if gitexec.IsContextErr(ctx, err) {
 				return lastErr
 			}
@@ -316,5 +333,34 @@ func rebaseAndPush(ctx context.Context, cfg SyncConfig) error {
 		}
 		return nil
 	}
+	_ = abortRebaseIfInProgress(ctx, cfg)
 	return lastErr
+}
+
+// rebaseInProgress reports whether the state clone has an unfinished rebase.
+// Uses on-disk rebase-merge/rebase-apply markers under .git (normal clone layout).
+func rebaseInProgress(stateRepoDir string) bool {
+	gitDir := filepath.Join(stateRepoDir, ".git")
+	for _, name := range []string{"rebase-merge", "rebase-apply"} {
+		if st, err := os.Stat(filepath.Join(gitDir, name)); err == nil && st.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+// abortRebaseIfInProgress clears a stuck rebase so the next pull --rebase can proceed.
+// No-op when the clone is not mid-rebase.
+func abortRebaseIfInProgress(ctx context.Context, cfg SyncConfig) error {
+	if !rebaseInProgress(cfg.StateRepoDir) {
+		return nil
+	}
+	r := cfg.runner()
+	if _, stderr, err := r.Run(ctx, cfg.StateRepoDir, "rebase", "--abort"); err != nil {
+		return SyncWarning{
+			Message: "state repo rebase abort failed",
+			Err:     fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr)),
+		}
+	}
+	return nil
 }
