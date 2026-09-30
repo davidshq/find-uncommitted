@@ -28,6 +28,15 @@ func gitInit(t *testing.T, dir string) {
 	}
 }
 
+func mustFind(t *testing.T, root string, opts WalkOptions) []string {
+	t.Helper()
+	repos, err := FindGitRepos(root, opts)
+	if err != nil {
+		t.Fatalf("FindGitRepos(%q): %v", root, err)
+	}
+	return repos
+}
+
 func contains(paths []string, want string) bool {
 	for _, p := range paths {
 		if p == want {
@@ -59,7 +68,7 @@ func TestFindGitReposDetectsWorktreeGitFile(t *testing.T) {
 		t.Skip("this git version uses a .git directory for worktrees")
 	}
 
-	repos := FindGitRepos(root, WalkOptions{})
+	repos := mustFind(t, root, WalkOptions{})
 	if !contains(repos, main) {
 		t.Errorf("expected main clone %q in %v", main, repos)
 	}
@@ -75,7 +84,7 @@ func TestFindGitReposScansHiddenRoot(t *testing.T) {
 	proj := filepath.Join(root, "proj")
 	gitInit(t, proj)
 
-	repos := FindGitRepos(root, WalkOptions{})
+	repos := mustFind(t, root, WalkOptions{})
 	if !contains(repos, proj) {
 		t.Fatalf("expected %q under hidden root, got %v", proj, repos)
 	}
@@ -89,7 +98,7 @@ func TestFindGitReposStillSkipsNestedHiddenDirs(t *testing.T) {
 	gitInit(t, visible)
 	gitInit(t, hidden)
 
-	repos := FindGitRepos(root, WalkOptions{})
+	repos := mustFind(t, root, WalkOptions{})
 	if !contains(repos, visible) {
 		t.Errorf("expected %q in %v", visible, repos)
 	}
@@ -106,7 +115,7 @@ func TestFindGitReposExcludeKeepsSiblings(t *testing.T) {
 	gitInit(t, state)
 	gitInit(t, other)
 
-	repos := FindGitRepos(root, WalkOptions{Excludes: []string{state}})
+	repos := mustFind(t, root, WalkOptions{Excludes: []string{state}})
 	if contains(repos, state) {
 		t.Errorf("excluded repo %q should not appear in %v", state, repos)
 	}
@@ -122,8 +131,66 @@ func TestFindGitReposStopsOnCancel(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	repos := FindGitRepos(root, WalkOptions{Context: ctx})
+	repos := mustFind(t, root, WalkOptions{Context: ctx})
 	if len(repos) != 0 {
 		t.Fatalf("expected no repos when cancelled before walk, got %d", len(repos))
+	}
+}
+
+// A missing root used to be swallowed as "zero repos", which the agent then
+// published as an empty snapshot that peers read as "all clear".
+func TestFindGitReposMissingRootIsError(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "unmounted")
+	repos, err := FindGitRepos(root, WalkOptions{})
+	if err == nil {
+		t.Fatalf("expected error for missing root, got repos %v", repos)
+	}
+}
+
+func TestFindGitReposFileRootIsError(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(root, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FindGitRepos(root, WalkOptions{}); err == nil {
+		t.Fatal("expected error for non-directory root")
+	}
+}
+
+// filepath.Walk Lstats the root, so a symlinked root (~/repos -> /data/repos)
+// was never descended. Repos must be found and reported under the link path,
+// and exclusions given under the link path must still apply.
+func TestFindGitReposFollowsSymlinkedRoot(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "data")
+	gitInit(t, filepath.Join(real, "proj"))
+	gitInit(t, filepath.Join(real, "state"))
+	link := filepath.Join(base, "repos")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	repos := mustFind(t, link, WalkOptions{Excludes: []string{filepath.Join(link, "state")}})
+	if !contains(repos, filepath.Join(link, "proj")) {
+		t.Fatalf("expected %q under symlinked root, got %v", filepath.Join(link, "proj"), repos)
+	}
+	if len(repos) != 1 {
+		t.Fatalf("expected only proj (state excluded), got %v", repos)
+	}
+}
+
+// A root that exists but can't be listed (permissions, stale mount) passes
+// Stat, then fails inside Walk — it must still be an error, not zero repos.
+func TestFindGitReposUnreadableRootIsError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	root := filepath.Join(t.TempDir(), "locked")
+	if err := os.Mkdir(root, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
+	if repos, err := FindGitRepos(root, WalkOptions{}); err == nil {
+		t.Fatalf("expected error for unreadable root, got repos %v", repos)
 	}
 }

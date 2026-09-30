@@ -225,3 +225,105 @@ func TestRepoIsEmptyIntegration(t *testing.T) {
 		t.Fatal("expected non-empty repo after commit")
 	}
 }
+
+func gitRepoWithCommit(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+	}
+	run("init", "-q", "-b", "main")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "test")
+	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "readme.txt")
+	run("commit", "-q", "-m", "init")
+	return dir
+}
+
+// S-2: `git branch --show-current` exits 0 with empty output on a detached HEAD
+// (every submodule, mid-rebase/bisect). That used to fall through to @{u} and
+// become an error, which also hid real dirty state.
+func TestCheckRepoStatusDetachedHeadIsNotError(t *testing.T) {
+	dir := gitRepoWithCommit(t)
+	if out, err := exec.Command("git", "-C", dir, "checkout", "-q", "--detach").CombinedOutput(); err != nil {
+		t.Fatalf("detach: %v (%s)", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("changed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st := checkRepoStatus(context.Background(), dir)
+	if st.Error != "" {
+		t.Fatalf("detached HEAD must not be an error, got %q", st.Error)
+	}
+	if !strings.HasPrefix(st.Branch, "detached HEAD (") {
+		t.Fatalf("expected detached HEAD (sha) branch label, got %q", st.Branch)
+	}
+	if !st.IsDirty {
+		t.Fatalf("dirty detached repo must report dirty: %+v", st)
+	}
+	if st.HasUnpushed {
+		t.Fatalf("detached HEAD on a branch tip has nothing unreachable: %+v", st)
+	}
+}
+
+// Commits made on a detached HEAD that no branch, remote ref or tag contains
+// are lost on the next checkout; they must not read as clean.
+func TestCheckRepoStatusDetachedHeadUnreachableCommitsAreUnpushed(t *testing.T) {
+	dir := gitRepoWithCommit(t)
+	for _, args := range [][]string{
+		{"checkout", "-q", "--detach"},
+		{"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "orphan 1"},
+		{"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "orphan 2"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+	}
+
+	st := checkRepoStatus(context.Background(), dir)
+	if st.Error != "" {
+		t.Fatalf("unexpected error %q", st.Error)
+	}
+	if !st.HasUnpushed || st.AheadCount != 2 {
+		t.Fatalf("expected 2 unreachable commits as unpushed, got %+v", st)
+	}
+	if st.IsClean {
+		t.Fatalf("detached HEAD with unreachable commits must not be clean: %+v", st)
+	}
+}
+
+// S-3: a branch whose upstream was merged and pruned ("gone") is the normal end
+// state of a feature branch. It is a no-usable-upstream cue, not a git error.
+func TestCheckRepoStatusGoneUpstreamIsCueNotError(t *testing.T) {
+	dir := gitRepoWithCommit(t)
+	for _, args := range [][]string{
+		{"remote", "add", "origin", "https://example.com/org/app.git"},
+		{"config", "branch.main.remote", "origin"},
+		{"config", "branch.main.merge", "refs/heads/main"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+	}
+
+	st := checkRepoStatus(context.Background(), dir)
+	if st.Error != "" {
+		t.Fatalf("gone upstream must not be an error, got %q", st.Error)
+	}
+	if !st.HasUntrackedUpstream {
+		t.Fatalf("gone upstream should surface as untracked-upstream cue: %+v", st)
+	}
+	if st.IsClean {
+		t.Fatal("gone upstream must not read as clean")
+	}
+}

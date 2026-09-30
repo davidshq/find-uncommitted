@@ -21,18 +21,53 @@ type WalkOptions struct {
 // FindGitRepos walks rootDir and returns paths to git repositories.
 // A directory containing a .git entry is treated as a repo root: .git is a
 // directory in a normal clone and a file in a linked worktree or submodule.
-func FindGitRepos(rootDir string, opts WalkOptions) []string {
+//
+// A root that is missing, unreadable or not a directory is an error: zero repos
+// from a bad root would otherwise publish an empty snapshot that peers read as
+// "all clear". A symlinked root is followed (filepath.Walk alone never descends
+// it), and repo paths are reported under rootDir as the user spelled it.
+func FindGitRepos(rootDir string, opts WalkOptions) ([]string, error) {
 	var repos []string
 	excludes := normalizeExcludes(opts.Excludes)
 	root := filepath.Clean(rootDir)
 
-	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+	walkRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, fmt.Errorf("scan root %q: %w", rootDir, err)
+	}
+	info, err := os.Stat(walkRoot)
+	if err != nil {
+		return nil, fmt.Errorf("scan root %q: %w", rootDir, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("scan root %q is not a directory", rootDir)
+	}
+	// Map a path under the resolved root back under the requested root so
+	// exclusions (e.g. the state repo) and published paths stay unchanged.
+	displayPath := func(p string) string {
+		if walkRoot == root {
+			return p
+		}
+		if rel, err := filepath.Rel(walkRoot, p); err == nil {
+			return filepath.Join(root, rel)
+		}
+		return p
+	}
+
+	var rootErr error
+	err = filepath.Walk(walkRoot, func(path string, info os.FileInfo, err error) error {
 		if opts.Context != nil {
 			if cerr := opts.Context.Err(); cerr != nil {
 				return cerr
 			}
 		}
 		if err != nil {
+			// Stat passed but the root can't be listed (permissions, stale
+			// mount): that's an unknown, not zero repos.
+			if path == walkRoot {
+				rootErr = fmt.Errorf("scan root %q: %w", rootDir, err)
+				return rootErr
+			}
 			if opts.Debug {
 				fmt.Printf("[DEBUG] Skipping (error accessing): %s\n", path)
 			}
@@ -49,7 +84,7 @@ func FindGitRepos(rootDir string, opts WalkOptions) []string {
 				}
 				fmt.Printf("[DEBUG] Found .git %s: %s\n", kind, path)
 			}
-			repoPath := filepath.Dir(path)
+			repoPath := displayPath(filepath.Dir(path))
 			if shouldExcludeRepo(repoPath, excludes) {
 				if opts.Debug {
 					fmt.Printf("[DEBUG] Excluding state/sync repo: %s\n", repoPath)
@@ -75,7 +110,7 @@ func FindGitRepos(rootDir string, opts WalkOptions) []string {
 
 		// Never skip the scan root itself. The user asked for it explicitly, so
 		// a hidden root (~/.dotfiles) must not silently yield zero repos.
-		if filepath.Clean(path) != root && shouldSkipDir(path) {
+		if filepath.Clean(path) != walkRoot && shouldSkipDir(path) {
 			if opts.Debug {
 				fmt.Printf("[DEBUG] Skipping directory: %s\n", path)
 			}
@@ -85,11 +120,14 @@ func FindGitRepos(rootDir string, opts WalkOptions) []string {
 		return nil
 	})
 
+	if rootErr != nil {
+		return nil, rootErr
+	}
 	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		fmt.Printf("Error scanning directory: %v\n", err)
 	}
 
-	return repos
+	return repos, nil
 }
 
 func normalizeExcludes(excludeRepos []string) []string {

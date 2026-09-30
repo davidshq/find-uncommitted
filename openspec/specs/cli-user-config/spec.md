@@ -84,9 +84,17 @@ The system SHALL write or update the user TOML config when `install-scheduler` s
 - **WHEN** `install-scheduler` succeeds
 - **THEN** the sticky config includes `interval`, `stale_ttl`, and `heartbeat`
 
+#### Scenario: Install persists an explicit tick timeout
+- **WHEN** `install-scheduler` runs with `--tick-timeout` (or `FIND_UNCOMMITTED_TICK_TIMEOUT` / sticky `tick_timeout`)
+- **THEN** the sticky config includes `tick_timeout` so the scheduler-launched agent uses it; when unset, `tick_timeout` is omitted and the built-in default applies
+
 #### Scenario: Agent creates missing config
 - **WHEN** agent mode starts with `--state-repo` and no config file exists
 - **THEN** the system writes a config file containing at least that `state_repo` and the resolved cadence settings
+
+#### Scenario: Generated machine id is always persisted
+- **WHEN** agent mode or `install-scheduler` generates a machine id (none from flag, env, or config) and no config file exists
+- **THEN** the system creates the config file holding `machine_id` so later starts reuse it; if the id cannot be persisted, the command fails instead of running under a throwaway id
 
 ### Requirement: Default aggregate when configured
 When a `state_repo` is resolved from config or environment and `--no-remote` is not set, interactive scans SHALL pull shared state (fast-forward only when possible) and present the cross-machine aggregate view.

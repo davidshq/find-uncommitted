@@ -32,6 +32,10 @@ The extension SHALL expose a status bar indicator reflecting the latest check ou
 - **WHEN** check reports only local dirty/unpushed/behind-style situations
 - **THEN** the status bar uses the quieter local presentation (not the cross-machine elevated style)
 
+#### Scenario: Exit 2 without JSON is an error
+- **WHEN** check exits `2` but stdout is not parseable JSON (for example a Go panic or `fatal error`)
+- **THEN** the folder is shown in the error state (`FU · error`), never as cross-machine attention, and no attention notification is shown
+
 #### Scenario: Manual refresh
 - **WHEN** the user runs the extension’s refresh or check command
 - **THEN** the extension re-runs check and updates the status bar from the new result
@@ -60,11 +64,23 @@ The extension SHALL support `findUncommitted.attentionDisplay` with values `noti
 - **THEN** the editor opens Find Uncommitted settings so the user can switch `attentionDisplay` to `statusBar`
 
 ### Requirement: Nudge-only posture
-The extension MUST NOT automatically commit, push, pull, stash, or otherwise mutate git repositories. It MUST NOT enable OS-level notifications by default. Detail surfaces (hover, command, output channel, or notification actions) SHALL present nudge text from the CLI situations and MUST NOT execute suggested git commands on the user’s behalf.
+The extension MUST NOT automatically commit, push, pull, stash, or otherwise mutate git repositories. It MUST NOT enable OS-level notifications by default. Detail surfaces (hover, command, output channel, or notification actions) SHALL present nudge text from the CLI situations and MUST NOT execute suggested git commands on the user’s behalf. The Output channel detail view SHALL include a wall-clock **Checked** timestamp from when the displayed check completed on this machine. Local machine lines SHALL include that same **checked** time. Remote machine lines SHALL show each snapshot **published** time (from check JSON `updated_at`) when available so the user can tell how fresh both sides are.
 
 #### Scenario: Showing details does not run git mutations
 - **WHEN** the user opens check details from the extension
 - **THEN** the extension only displays status/nudge information from the last check (or re-runs read-only check) and does not run commit/push/pull
+
+#### Scenario: Output channel shows when the check last ran
+- **WHEN** the extension writes check details to the Output channel
+- **THEN** the details include a Checked timestamp from that check completion
+
+#### Scenario: Output channel shows local checked time on the machine line
+- **WHEN** the extension writes check details that include a local machine row
+- **THEN** that machine line includes the Checked wall-clock time for this run
+
+#### Scenario: Output channel shows remote snapshot publish time
+- **WHEN** check JSON includes a remote machine with `updated_at`
+- **THEN** the Output channel machine line includes that publish time (and a relative age)
 
 ### Requirement: Binary discovery and soft failure
 The extension SHALL resolve the CLI via a user setting for binary path when set, otherwise via `PATH` lookup of the platform binary name. When the binary is missing or not executable, the extension SHALL show a clear setup cue and MUST NOT crash the extension host or retry in a tight loop.

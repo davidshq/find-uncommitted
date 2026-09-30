@@ -384,3 +384,45 @@ func TestDetectLocalSituationsUsesMachineID(t *testing.T) {
 		t.Fatalf("expected machine id in situation: %+v", got)
 	}
 }
+
+// S-4: linked worktrees share an origin and are by definition on different
+// branches. A peer with app on main plus a worktree on feat, compared against a
+// local main, raised a permanent false cross-machine branch_mismatch.
+func TestBranchMismatchIgnoresRemoteSiblingWorktrees(t *testing.T) {
+	origin := "github.com/acme/app"
+	rows := []AggregateRow{
+		{Machine: "laptop", Local: true, Repo: RepoSnapshot{Path: "/laptop/app", Origin: origin, Branch: "main", IsClean: true}},
+		{Machine: "desktop", Repo: RepoSnapshot{Path: "/desktop/app", Origin: origin, Branch: "main", IsClean: true}},
+		{Machine: "desktop", Repo: RepoSnapshot{Path: "/desktop/app-feat", Origin: origin, Branch: "feat", IsClean: true}},
+		{Machine: "server", Repo: RepoSnapshot{Path: "/srv/app", Origin: origin, Branch: "release", IsClean: true}},
+	}
+	s, ok := findSituation(DetectSituations(rows), SituationBranchMismatch)
+	if !ok {
+		t.Fatal("server has no tree on main, expected branch_mismatch for it")
+	}
+	if strings.Contains(s.Nudge, "desktop") {
+		t.Fatalf("desktop has a tree on main and must not be reported: %q", s.Nudge)
+	}
+	for _, m := range s.Machines {
+		if m == "desktop" {
+			t.Fatalf("Machines must list only mismatched peers: %v", s.Machines)
+		}
+	}
+
+	// Without server, desktop's sibling worktree alone must not alarm.
+	if _, ok := findSituation(DetectSituations(rows[:3]), SituationBranchMismatch); ok {
+		t.Fatal("remote sibling worktree produced a false branch_mismatch")
+	}
+}
+
+// A detached HEAD (submodule, mid-rebase) has no branch to compare.
+func TestBranchMismatchSkipsDetachedHead(t *testing.T) {
+	origin := "github.com/acme/lib"
+	rows := []AggregateRow{
+		{Machine: "laptop", Local: true, Repo: RepoSnapshot{Path: "/laptop/lib", Origin: origin, Branch: "detached HEAD (abc123abc123)", IsClean: true}},
+		{Machine: "desktop", Repo: RepoSnapshot{Path: "/desktop/lib", Origin: origin, Branch: "detached HEAD (def456def456)", IsClean: true}},
+	}
+	if s, ok := findSituation(DetectSituations(rows), SituationBranchMismatch); ok {
+		t.Fatalf("detached HEADs must not raise branch_mismatch: %q", s.Nudge)
+	}
+}

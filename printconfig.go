@@ -28,8 +28,8 @@ func printResolvedConfig(w io.Writer, configPath string, configExists bool, r Re
 	printConfigString(w, "interval", interval, r.IntervalSource, "default")
 	printConfigString(w, "heartbeat", heartbeat, r.HeartbeatSource, "default")
 	printConfigString(w, "stale_ttl", staleTTL, r.StaleTTLSource, "default")
-	tickSrc := SourceNone
-	if tickTimeoutFromFlag {
+	tickSrc := r.TickTimeoutSource
+	if tickSrc == SourceNone && tickTimeoutFromFlag {
 		tickSrc = SourceFlag
 	}
 	printConfigString(w, "tick_timeout", tickTimeout, tickSrc, "default")

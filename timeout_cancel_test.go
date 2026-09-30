@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +48,30 @@ func TestPublishAgentSnapshotAbortsOnTickDeadline(t *testing.T) {
 	}
 	if !gitexec.IsContextErr(ctx, err) && !strings.Contains(strings.ToLower(err.Error()), "cancel") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// S-1: an unmounted/missing scan root must not publish an empty snapshot that
+// peers read as "all clear" — the tick fails and nothing is written.
+func TestPublishAgentSnapshotMissingRootDoesNotPublish(t *testing.T) {
+	state := t.TempDir()
+	cfg := AgentConfig{
+		ScanRoot:     filepath.Join(t.TempDir(), "unmounted"),
+		StateRepoDir: state,
+		MachineID:    "test-machine",
+		Sync: SyncConfig{
+			StateRepoDir: state,
+			MachineID:    "test-machine",
+			Runner:       newScriptedGit(),
+			RetryDelay:   time.Millisecond,
+		},
+	}
+	_, committed, err := publishAgentSnapshot(context.Background(), cfg)
+	if err == nil || committed {
+		t.Fatalf("expected scan-root error and no publish, got committed=%v err=%v", committed, err)
+	}
+	if _, statErr := os.Stat(SnapshotFilePath(state, "test-machine")); !os.IsNotExist(statErr) {
+		t.Fatalf("snapshot file must not be written for a missing root (stat err %v)", statErr)
 	}
 }
 

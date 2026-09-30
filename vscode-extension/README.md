@@ -29,7 +29,7 @@ npm test
 ```bash
 npm install          # installs pinned @vscode/vsce
 npm run package      # runs local vsce (no network fetch)
-# then: Install from VSIX… → find-uncommitted-0.1.0.vsix
+# then: Install from VSIX… → find-uncommitted-0.1.3.vsix
 # Cursor: same “Install from VSIX” flow
 ```
 
@@ -48,7 +48,8 @@ npm run package      # runs local vsce (no network fetch)
 |---------|--------|
 | Find Uncommitted: Check Workspace | Run check and open the Output channel |
 | Find Uncommitted: Refresh | Re-run check quietly (status bar only) |
-| Find Uncommitted: Show Details | Open Output channel (nudges only) |
+| Find Uncommitted: Show Details | Open Output channel (Checked time + nudges; remote publish times when known) |
+
 
 Each `check` subprocess is killed after **30s** so a stuck state-repo pull cannot hang the UI forever.
 
@@ -66,7 +67,7 @@ Each `check` subprocess is killed after **30s** so a stuck state-repo pull canno
 
 By default, **cross-machine** attention uses the usual VS Code warning notification with:
 
-- **Show Details** — Output channel with nudges  
+- **Show Details** — Output channel with nudges; **Checked** header; local machine lines include **checked** time; remotes include snapshot **published** time when the CLI provides `updated_at`  
 - **Open Settings** — jump to `attentionDisplay` to prefer the status bar only  
 - **Dismiss** — hide for this attention episode (refreshes with the same cue won’t re-spam)
 

@@ -161,6 +161,8 @@ func main() {
 		RedactPathsSet: flagSet["redact-paths"],
 		MaxWorkers:     maxWorkers,
 		MaxWorkersSet:  flagSet["max-workers"],
+		TickTimeout:    tickTimeoutStr,
+		TickTimeoutSet: flagSet["tick-timeout"],
 	}, fileCfg, os.Getenv)
 
 	stateRepo = resolved.StateRepo
@@ -173,6 +175,9 @@ func main() {
 	}
 	if resolved.StaleTTL != "" {
 		staleTTLStr = resolved.StaleTTL
+	}
+	if resolved.TickTimeout != "" {
+		tickTimeoutStr = resolved.TickTimeout
 	}
 	redactPaths = resolved.RedactPaths
 	maxWorkers = resolved.MaxWorkers
@@ -188,9 +193,11 @@ func main() {
 	// Hostname-only identity collides on cloned VMs; generate and persist a stable id
 	// only when installing the scheduler or starting the agent (not on every bare scan).
 	persistMachineIDInConfig := false
+	generatedMachineID := false
 	if shouldPersistStableMachineID(resolved, fileCfg, flagSet, installSched, agentMode) {
 		machineID = GenerateStableMachineID(machineID)
 		persistMachineIDInConfig = true
+		generatedMachineID = true
 	} else if flagSet["machine-id"] {
 		persistMachineIDInConfig = true
 	}
@@ -267,11 +274,25 @@ func main() {
 		os.Exit(1)
 	}
 
+	// A generated id that cannot be persisted changes on every start (ghost
+	// machines, per-id agent lock no longer dedupes), so fail rather than run.
+	if generatedMachineID && configPath == "" {
+		fmt.Fprintf(os.Stderr, "Error: cannot persist generated machine id %q (no config path); set --machine-id or %s\n", machineID, envMachineID)
+		os.Exit(1)
+	}
+
 	if installSched {
 		requireStateRepo(stateRepo, "install-scheduler")
 		validateStateRepoOrExit(stateRepo)
 		if configPath != "" {
-			sticky := stickyConfigFromRun(stateRepo, rootDir, machineID, intervalStr, heartbeatStr, staleTTLStr, redactPaths, gitexec.ResolvedMaxWorkers(maxWorkers))
+			// tick_timeout is persisted only when explicitly chosen, so the
+			// installed agent (which runs bare `agent`) honors --tick-timeout
+			// without pinning the built-in default.
+			stickyTick := ""
+			if resolved.TickTimeoutSource != SourceNone {
+				stickyTick = tickTimeoutStr
+			}
+			sticky := stickyConfigFromRun(stateRepo, rootDir, machineID, intervalStr, heartbeatStr, staleTTLStr, stickyTick, redactPaths, gitexec.ResolvedMaxWorkers(maxWorkers))
 			if err := SaveUserConfig(configPath, sticky); err != nil {
 				fmt.Fprintf(os.Stderr, "Error writing sticky config: %v\n", err)
 				os.Exit(1)
@@ -313,6 +334,10 @@ func main() {
 		}
 		if persistMachineIDInConfig && configPath != "" {
 			if err := EnsureMachineIDInConfig(configPath, machineID); err != nil {
+				if generatedMachineID {
+					fmt.Fprintf(os.Stderr, "Error: could not persist generated machine_id %q: %v (set --machine-id or %s)\n", machineID, err, envMachineID)
+					os.Exit(1)
+				}
 				fmt.Fprintf(os.Stderr, "warning: could not persist machine_id: %v\n", err)
 			}
 		}
@@ -336,7 +361,11 @@ func main() {
 	fmt.Println("This may take a while depending on the size of your drive...")
 	fmt.Println()
 
-	repos := findGitRepos(rootDir, stateRepo)
+	repos, err := findGitRepos(rootDir, stateRepo)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 	if len(repos) == 0 {
 		fmt.Println("No git repositories found.")
 	} else {
@@ -481,11 +510,11 @@ func validateStateRepo(dir string) error {
 	return nil
 }
 
-func findGitRepos(rootDir string, excludeRepos ...string) []string {
+func findGitRepos(rootDir string, excludeRepos ...string) ([]string, error) {
 	return findGitReposContext(context.Background(), rootDir, excludeRepos...)
 }
 
-func findGitReposContext(ctx context.Context, rootDir string, excludeRepos ...string) []string {
+func findGitReposContext(ctx context.Context, rootDir string, excludeRepos ...string) ([]string, error) {
 	return discover.FindGitRepos(rootDir, discover.WalkOptions{
 		Debug:    debugMode,
 		Excludes: excludeRepos,
@@ -546,28 +575,34 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoSnapshot {
 
 	// Get current branch
 	branch, stderr, err := gitexec.Run(ctx, repoPath, "branch", "--show-current")
-	if err != nil {
-		if setGitCancelled(ctx, &status, err) {
+	if err != nil && setGitCancelled(ctx, &status, err) {
+		return status
+	}
+	// Detached HEAD (every submodule, mid-rebase/bisect): modern git exits 0
+	// with empty output; older git exits 1.
+	exitErr, isExitErr := err.(*exec.ExitError)
+	detached := (err == nil && strings.TrimSpace(branch) == "") ||
+		(isExitErr && exitErr.ExitCode() == 1)
+	switch {
+	case detached:
+		// Try to get the commit hash instead
+		commit, _, commitErr := gitexec.Run(ctx, repoPath, "rev-parse", fmt.Sprintf("--short=%d", shortHeadSHALen), "HEAD")
+		if commitErr == nil {
+			status.Branch = fmt.Sprintf("detached HEAD (%s)", strings.TrimSpace(commit))
+		} else if setGitCancelled(ctx, &status, commitErr) {
 			return status
-		}
-		// Check if it's a detached HEAD state (exit code 1)
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			// Try to get the commit hash instead
-			commit, _, commitErr := gitexec.Run(ctx, repoPath, "rev-parse", fmt.Sprintf("--short=%d", shortHeadSHALen), "HEAD")
-			if commitErr == nil {
-				status.Branch = fmt.Sprintf("detached HEAD (%s)", strings.TrimSpace(commit))
-			} else if setGitCancelled(ctx, &status, commitErr) {
-				return status
-			} else {
-				status.Branch = "detached HEAD"
-				status.Error = fmt.Sprintf("Branch issue: %s", gitexec.FormatError(stderr, err))
-			}
 		} else {
-			status.Branch = "unknown"
+			status.Branch = "detached HEAD"
+			if err == nil {
+				stderr, err = "", commitErr
+			}
 			status.Error = fmt.Sprintf("Branch issue: %s", gitexec.FormatError(stderr, err))
 		}
 		// Don't return here, continue checking other status
-	} else {
+	case err != nil:
+		status.Branch = "unknown"
+		status.Error = fmt.Sprintf("Branch issue: %s", gitexec.FormatError(stderr, err))
+	default:
 		status.Branch = strings.TrimSpace(branch)
 	}
 
@@ -600,8 +635,9 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoSnapshot {
 		status.HeadSHA = shortHeadSHA(ctx, repoPath)
 	}
 
-	// Upstream tracking (skip for empty repositories).
-	if !status.IsEmpty {
+	// Upstream tracking (skip for empty repositories and detached HEAD, which
+	// has no branch to track anything — @{u} would only fail).
+	if !status.IsEmpty && !detached {
 		_, upStderr, upstreamErr := gitexec.Run(ctx, repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
 		if upstreamErr != nil {
 			if setGitCancelled(ctx, &status, upstreamErr) {
@@ -610,6 +646,10 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoSnapshot {
 			// Empty-repo detection already ran via repoIsEmpty (HEAD). Do not
 			// reclassify upstream "unknown revision" (e.g. deleted @{u}) as empty.
 			untrackedUpstream, repoErr := classifyUpstreamFailure(upStderr, upstreamErr)
+			if repoErr != "" && upstreamGone(ctx, repoPath, status.Branch) {
+				// Merged + pruned upstream: no usable upstream, not a git error.
+				untrackedUpstream, repoErr = true, ""
+			}
 			if repoErr != "" {
 				status.Error = repoErr
 			} else if untrackedUpstream {
@@ -619,6 +659,12 @@ func checkRepoStatus(ctx context.Context, repoPath string) RepoSnapshot {
 			// Ahead/behind against cached upstream refs only (no fetch).
 			fillAheadBehind(ctx, &status, repoPath)
 		}
+	}
+
+	// A detached HEAD has no upstream, but commits made on it that no ref
+	// contains are lost on the next checkout — surface them as unpushed.
+	if !status.IsEmpty && detached {
+		fillDetachedUnreachable(ctx, &status, repoPath)
 	}
 
 	// Dirty means working tree changes only.
@@ -651,13 +697,31 @@ func fillAheadBehind(ctx context.Context, status *RepoSnapshot, repoPath string)
 	}
 }
 
-// revListCount runs `git rev-list --count <range>`. On failure it returns err
+// fillDetachedUnreachable counts commits reachable from a detached HEAD but not
+// from any branch, remote-tracking ref or tag. Submodules sit on referenced
+// commits and count 0. Mid-rebase, already-replayed commits are unreachable and
+// count as unpushed — intentional: an abort or stray checkout would lose them.
+// Failures set Error, never a false 0.
+func fillDetachedUnreachable(ctx context.Context, status *RepoSnapshot, repoPath string) {
+	n, stderr, err := revListCount(ctx, repoPath, "HEAD", "--not", "--branches", "--remotes", "--tags")
+	if err != nil {
+		if setGitCancelled(ctx, status, err) {
+			return
+		}
+		appendRepoCheckError(status, stderr, err, "Failed to check detached HEAD commits", "detached HEAD check failed")
+		return
+	}
+	status.AheadCount = n
+	status.HasUnpushed = n > 0
+}
+
+// revListCount runs `git rev-list --count <revs...>`. On failure it returns err
 // (and stderr) so callers can surface unknown ahead/behind instead of 0.
-func revListCount(ctx context.Context, repoPath, revRange string) (count int, stderr string, err error) {
-	out, stderr, err := gitexec.Run(ctx, repoPath, "rev-list", "--count", revRange)
+func revListCount(ctx context.Context, repoPath string, revs ...string) (count int, stderr string, err error) {
+	out, stderr, err := gitexec.Run(ctx, repoPath, append([]string{"rev-list", "--count"}, revs...)...)
 	if err != nil {
 		if debugMode {
-			fmt.Printf("[DEBUG] Failed rev-list %s in %s: %v\n", revRange, repoPath, err)
+			fmt.Printf("[DEBUG] Failed rev-list %s in %s: %v\n", strings.Join(revs, " "), repoPath, err)
 		}
 		return 0, stderr, err
 	}

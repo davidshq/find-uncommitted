@@ -47,3 +47,33 @@ func TestEnsureMachineIDInConfig(t *testing.T) {
 		t.Fatalf("expected existing machine_id preserved, got %q", cfg.MachineID)
 	}
 }
+
+// C-1: an agent configured only via env (no config file) used to skip
+// persistence, so every start minted a new random id (ghost machines, broken
+// agent lock). The id must be written to a new config file and resolve back.
+func TestEnsureMachineIDInConfigCreatesMissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "find-uncommitted", "config.toml")
+	if err := EnsureMachineIDInConfig(path, "box-1234abcd"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadUserConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MachineID != "box-1234abcd" {
+		t.Fatalf("machine_id = %q", cfg.MachineID)
+	}
+	// Next start: env supplies state repo, file supplies the id — no regeneration.
+	resolved := ResolveSettings(FlagOverrides{}, cfg, func(k string) string {
+		if k == envStateRepo {
+			return "/state"
+		}
+		return ""
+	})
+	if shouldPersistStableMachineID(resolved, cfg, map[string]bool{}, false, true) {
+		t.Fatal("agent must reuse the persisted id instead of generating a new one")
+	}
+	if resolved.MachineID != "box-1234abcd" || resolved.StateRepo != "/state" {
+		t.Fatalf("resolved = %+v", resolved)
+	}
+}

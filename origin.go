@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/url"
 	"path"
-	"path/filepath"
 	"strings"
 
 	"github.com/davidshq/find-uncommitted/internal/gitexec"
@@ -103,17 +102,31 @@ func redactOrigin(origin string) string {
 }
 
 // pathBasenameIdentity returns parent/base for repos without origin correlation.
-// Empty means the path cannot be identified from basename alone.
-func pathBasenameIdentity(path string) string {
-	base := filepath.Base(path)
-	if base == "" || base == "." || base == string(filepath.Separator) || base == "…" {
+// Empty means the path cannot be identified from basename alone. Peer paths use
+// the publisher's separators, so both \ and / are treated as separators
+// regardless of the reader's OS (Windows publisher, Linux reader).
+func pathBasenameIdentity(p string) string {
+	p = slashPath(p)
+	base := path.Base(p)
+	if base == "" || base == "." || base == "/" || base == "…" || isDriveName(base) {
 		return ""
 	}
-	parent := filepath.Base(filepath.Dir(path))
-	if parent != "" && parent != "." && parent != string(filepath.Separator) && parent != "…" {
+	parent := path.Base(path.Dir(p))
+	if parent != "" && parent != "." && parent != "/" && parent != "…" && !isDriveName(parent) {
 		return parent + "/" + base
 	}
 	return base
+}
+
+// slashPath normalizes Windows separators so published paths compare the same
+// on every OS.
+func slashPath(p string) string {
+	return strings.ReplaceAll(p, "\\", "/")
+}
+
+// isDriveName reports a bare Windows drive component such as "C:".
+func isDriveName(s string) bool {
+	return len(s) == 2 && s[1] == ':'
 }
 
 // repoCorrelationKey is the stable identity used to match one project across

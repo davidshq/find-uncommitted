@@ -56,6 +56,14 @@ func TestCollectDoctorReportWithStateRepo(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// A real publish commits the snapshot; an uncommitted one is a doctor WARN.
+	for _, args := range [][]string{{"add", snapPath}, {"commit", "-q", "-m", "publish"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = state
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+	}
 
 	in := DoctorInput{
 		ConfigPath:   filepath.Join(t.TempDir(), "config.toml"),
@@ -161,4 +169,54 @@ func initTempGitRepo(t *testing.T) string {
 	run("add", "README")
 	run("commit", "-m", "init")
 	return dir
+}
+
+// C-2: commit succeeded but push keeps failing — the local snapshot is fresh,
+// peers still hold the old one. doctor must not say "OK last publish".
+func TestCollectDoctorReportUnpushedPublishWarns(t *testing.T) {
+	state := initTempGitRepo(t)
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+	}
+	git(state, "init", "-q", "--bare", remote)
+	git(state, "remote", "add", "origin", remote)
+	git(state, "push", "-q", "-u", "origin", "HEAD")
+
+	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+	machineID := "unpushed-machine"
+	snapPath := SnapshotFilePath(state, machineID)
+	if err := WriteMachineSnapshot(snapPath, MachineSnapshot{
+		MachineID: machineID,
+		UpdatedAt: now.Add(-1 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	git(state, "add", snapPath)
+	git(state, "commit", "-q", "-m", "publish")
+
+	in := DoctorInput{
+		MachineID:   machineID,
+		StateRepo:   state,
+		ScanRoot:    "/repos",
+		Interval:    DefaultIntervalString,
+		Heartbeat:   DefaultHeartbeatString,
+		StaleTTL:    DefaultStaleTTLString,
+		StaleTTLDur: DefaultStaleTTL,
+		TickTimeout: DefaultTickTimeoutString,
+		Now:         now,
+	}
+	report := collectDoctorReport(context.Background(), in)
+	joined := strings.Join(report.lines, "\n")
+	if strings.Contains(joined, "OK   last publish:") {
+		t.Fatalf("unpushed publish must not be OK:\n%s", joined)
+	}
+	if !strings.Contains(joined, "WARN last publish:") || !strings.Contains(joined, "1 state-repo commit(s) not pushed") {
+		t.Fatalf("expected unpushed warn:\n%s", joined)
+	}
 }

@@ -264,19 +264,39 @@ func detectGroupSituations(g ProjectGroup) []Situation {
 
 	branchMismatch := false
 	if local != nil && len(remote) > 0 {
-		localBranch := strings.TrimSpace(local.Repo.Branch)
+		// Linked worktrees share an origin, so one machine can hold the project
+		// on several branches at once. Compare against every local branch, and
+		// flag a peer only when none of its trees is on one of them.
+		localBranches := map[string]bool{}
+		localBranch := ""
+		for _, l := range locals {
+			if b := comparableBranch(l.Repo.Branch); b != "" {
+				localBranches[b] = true
+				if localBranch == "" {
+					localBranch = b
+				}
+			}
+		}
+		peerOnLocalBranch := map[string]bool{}
+		for _, r := range remote {
+			if localBranches[comparableBranch(r.Repo.Branch)] {
+				peerOnLocalBranch[r.Machine] = true
+			}
+		}
 		var mismatchParts []string
+		var mismatchMachines []string
 		var mismatchStale bool
 		for _, r := range remote {
-			other := strings.TrimSpace(r.Repo.Branch)
-			if localBranch == "" || other == "" {
+			other := comparableBranch(r.Repo.Branch)
+			if localBranch == "" || other == "" || peerOnLocalBranch[r.Machine] {
 				continue
 			}
-			if other != localBranch {
-				mismatchParts = append(mismatchParts, fmt.Sprintf("%s on %s", other, formatMachineLabel(r)))
-				if r.Stale {
-					mismatchStale = true
-				}
+			mismatchParts = append(mismatchParts, fmt.Sprintf("%s on %s", other, formatMachineLabel(r)))
+			if !containsString(mismatchMachines, r.Machine) {
+				mismatchMachines = append(mismatchMachines, r.Machine)
+			}
+			if r.Stale {
+				mismatchStale = true
 			}
 		}
 		if len(mismatchParts) > 0 {
@@ -290,7 +310,7 @@ func detectGroupSituations(g ProjectGroup) []Situation {
 				ProjectKey:   g.Key,
 				ProjectLabel: g.Label,
 				Nudge:        nudge,
-				Machines:     append([]string{local.Machine}, machineNames(remote)...),
+				Machines:     append([]string{local.Machine}, mismatchMachines...),
 				Stale:        mismatchStale,
 			})
 		}
@@ -440,6 +460,25 @@ func formatMachineLabel(row AggregateRow) string {
 		return name + " (stale)"
 	}
 	return name
+}
+
+// comparableBranch returns the branch name for cross-machine comparison, or ""
+// when there is none (unknown, or a detached HEAD such as a submodule).
+func comparableBranch(branch string) string {
+	branch = strings.TrimSpace(branch)
+	if strings.HasPrefix(branch, "detached HEAD") {
+		return ""
+	}
+	return branch
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 func machineNames(rows []AggregateRow) []string {

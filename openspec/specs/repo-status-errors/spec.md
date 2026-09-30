@@ -18,7 +18,7 @@ When a per-repository git subprocess fails during status checking, the system SH
 - **THEN** the repository error includes the execution error text
 
 ### Requirement: Narrow classification of benign upstream outcomes
-During upstream tracking checks, the system SHALL classify only known-benign outcomes explicitly. `no upstream configured` SHALL set untracked-upstream status without a repository error. Empty repositories (no commits yet) SHALL NOT be reported as local git errors or Attention-worthy fix-local-error situations. Any other upstream fatal SHALL remain a repository error with stderr detail preserved.
+During upstream tracking checks, the system SHALL classify only known-benign outcomes explicitly. `no upstream configured` SHALL set untracked-upstream status without a repository error, as SHALL a configured upstream whose tracking ref no longer exists ("gone" after merge + prune). A detached HEAD SHALL be labeled `detached HEAD (<sha>)` and SHALL skip upstream checks rather than report an error. Empty repositories (no commits yet) SHALL NOT be reported as local git errors or Attention-worthy fix-local-error situations. Any other upstream fatal SHALL remain a repository error with stderr detail preserved.
 
 #### Scenario: No upstream configured
 - **WHEN** upstream resolution fails with `fatal: no upstream configured`
@@ -28,8 +28,16 @@ During upstream tracking checks, the system SHALL classify only known-benign out
 - **WHEN** a repository has no commits yet (verified via unborn HEAD / `rev-parse HEAD` failure with empty-repo messages such as `does not have any commits yet` or `needed a single revision`)
 - **THEN** the repository is marked as empty (not an error) and Attention does not emit a fix-local-git-error nudge for it
 
+#### Scenario: Gone upstream
+- **WHEN** the branch has a configured upstream whose remote-tracking ref was deleted (merged and pruned)
+- **THEN** the repository has untracked upstream set and no `Error` field, and MUST NOT be marked empty
+
+#### Scenario: Detached HEAD
+- **WHEN** the repository is on a detached HEAD (submodule, mid-rebase or bisect), including when `git branch --show-current` exits 0 with empty output
+- **THEN** the branch is `detached HEAD (<sha>)`, no upstream error is recorded, and dirty state is still reported
+
 #### Scenario: Unknown upstream fatal stays an error
-- **WHEN** upstream resolution fails with a fatal message that is neither no-upstream nor empty-repo (including generic `unknown revision` for a deleted upstream on a repo that already has commits)
+- **WHEN** upstream resolution fails with a fatal message that is neither no-upstream, gone-upstream, nor empty-repo
 - **THEN** the repository `Error` includes the stderr detail and Attention MAY include a fix-local-git-error nudge; the repository MUST NOT be marked empty
 
 ### Requirement: Invalid repository errors include detail when available

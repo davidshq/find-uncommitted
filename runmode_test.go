@@ -111,11 +111,16 @@ func TestNewAgentConfig(t *testing.T) {
 }
 
 func TestStickyConfigFromRun(t *testing.T) {
-	cfg := stickyConfigFromRun("/state", "/scan", "m1", "2m", "15m", "30m", true, 8)
+	cfg := stickyConfigFromRun("/state", "/scan", "m1", "2m", "15m", "30m", "15m", true, 8)
 	if cfg.StateRepo != "/state" || cfg.ScanRoot != "/scan" || cfg.MachineID != "m1" {
 		t.Fatalf("unexpected paths/id: %+v", cfg)
 	}
 	if cfg.Interval != "2m" || cfg.Heartbeat != "15m" || cfg.StaleTTL != "30m" || !cfg.RedactPaths || cfg.MaxWorkers != 8 {
 		t.Fatalf("unexpected cadence/redact/workers: %+v", cfg)
+	}
+	// C-3: the installed agent runs bare `agent`, so --tick-timeout only
+	// reaches it through sticky config.
+	if cfg.TickTimeout != "15m" {
+		t.Fatalf("tick_timeout not persisted: %+v", cfg)
 	}
 }

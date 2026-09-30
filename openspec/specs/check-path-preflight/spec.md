@@ -75,11 +75,15 @@ Check mode SHALL support a machine-readable JSON output flag (e.g. `--json`) tha
 - **THEN** output remains the compact human summary and nudge lines (not a JSON document as the primary stdout)
 
 ### Requirement: Stable check JSON contract for consumers
-JSON check output SHALL include a `schemaVersion` (integer, starting at `1`) and enough structured fields for an editor client to render project × machine status without scraping text: project label, machine entries (machine id, whether local, whether stale, branch, and dirty/unpushed/behind-style status fields already known to snapshots), and situations (`kind`, `nudge`, related machines, stale flag when applicable). Additive fields in later versions MUST NOT require a schemaVersion bump if older clients can ignore them; renaming or removing fields requires a new schemaVersion.
+JSON check output SHALL include a `schemaVersion` (integer, starting at `1`) and enough structured fields for an editor client to render project × machine status without scraping text: project label, machine entries (machine id, whether local, whether stale, optional remote snapshot `updated_at` as RFC3339, branch, and dirty/unpushed/behind-style status fields already known to snapshots), and situations (`kind`, `nudge`, related machines, stale flag when applicable). Additive fields in later versions MUST NOT require a schemaVersion bump if older clients can ignore them; renaming or removing fields requires a new schemaVersion.
 
 #### Scenario: Consumer can distinguish local vs remote machine
 - **WHEN** check JSON includes both the local machine and at least one remote snapshot row for the project
 - **THEN** the local entry is marked local and remote entries are not, so a client can emphasize cross-machine situations
+
+#### Scenario: Remote machine includes snapshot publish time
+- **WHEN** check JSON includes a remote machine row loaded from a state-repo snapshot
+- **THEN** that machine entry includes `updated_at` (RFC3339) from the snapshot; the live local entry omits `updated_at`
 
 #### Scenario: Warnings stay on stderr
 - **WHEN** check JSON mode runs and the tool emits a non-fatal warning (e.g. state repo busy, pull failed)

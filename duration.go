@@ -57,3 +57,49 @@ func parsePositiveDurationFlag(name, value string) (time.Duration, error) {
 	}
 	return d, nil
 }
+
+// formatLocalWallClock renders t in the local zone as YYYY-MM-DD HH:MM:SS.
+func formatLocalWallClock(t time.Time) string {
+	return t.Local().Format("2006-01-02 15:04:05")
+}
+
+// formatCompactAge renders a short relative age (e.g. "45s", "12m", "3h20m", "2d").
+func formatCompactAge(d time.Duration) string {
+	if d < 0 {
+		d = -d
+	}
+	d = d.Truncate(time.Second)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 48*time.Hour:
+		h := int(d.Hours())
+		m := int(d.Minutes()) % 60
+		if m == 0 {
+			return fmt.Sprintf("%dh", h)
+		}
+		return fmt.Sprintf("%dh%dm", h, m)
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
+// formatPublishedSuffix annotates a remote snapshot with wall-clock + relative age.
+// Returns "" when updatedAt is zero (live local rows).
+func formatPublishedSuffix(updatedAt time.Time, now time.Time) string {
+	if updatedAt.IsZero() {
+		return ""
+	}
+	return fmt.Sprintf(" · published %s (%s ago)",
+		formatLocalWallClock(updatedAt), formatCompactAge(now.Sub(updatedAt)))
+}
+
+// formatCheckedSuffix annotates a live local row with this check’s wall-clock time.
+func formatCheckedSuffix(checkedAt time.Time) string {
+	if checkedAt.IsZero() {
+		return ""
+	}
+	return fmt.Sprintf(" · checked %s", formatLocalWallClock(checkedAt))
+}

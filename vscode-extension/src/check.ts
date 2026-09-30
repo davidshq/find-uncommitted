@@ -168,8 +168,8 @@ export function parseResult(stdout: string): CheckJSONResult | undefined {
 
 /**
  * Map CLI exit + JSON to a folder outcome. Exit 1 for non-git is quiet skip.
- * Exit 2 is attention (including unparseable stdout), except parseable
- * `local_error`-only results which map to error (`FU · error`).
+ * Exit 2 with JSON is attention, except `local_error`-only results which map
+ * to error (`FU · error`). Exit 2 without parseable JSON is error (crash).
  */
 export function outcomeFromRun(
   folder: string,
@@ -205,26 +205,17 @@ export function outcomeFromRun(
           stderr: raw.stderr.trim() || undefined,
         };
       }
-      // No parseable JSON: keep attention and elevate — fail loud rather than
-      // mislabel cross-machine work as quiet local dirty.
-      const fallback: CheckJSONResult = {
-        schemaVersion: 1,
-        ok: false,
-        attention: true,
-        situations: [
-          {
-            kind: "other_machine_work",
-            nudge: raw.stdout.trim()
-              ? raw.stdout.trim().slice(0, 500)
-              : "attention (unparseable check output)",
-          },
-        ],
-      };
+      // No parseable JSON: `check --json` always prints JSON for real
+      // attention, so this is a crash (Go panic / fatal error also exit 2
+      // with empty stdout) — an error, never a cross-machine alert.
+      const detail = raw.stderr.trim() || raw.stdout.trim();
       return {
-        kind: "attention",
+        kind: "error",
         folder,
-        result: fallback,
-        elevated: true,
+        message: detail
+          ? `check exited 2 without JSON output: ${detail.split("\n")[0].slice(0, 200)}`
+          : "check exited 2 without JSON output",
+        stderr: raw.stderr.trim() || undefined,
       };
     }
     // CLI encodes status-probe failures as exit 2 + local_error. That is not

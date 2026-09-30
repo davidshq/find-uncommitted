@@ -25,6 +25,7 @@ const (
 	envStaleTTL    = "FIND_UNCOMMITTED_STALE_TTL"
 	envRedactPaths = "FIND_UNCOMMITTED_REDACT_PATHS"
 	envMaxWorkers  = "FIND_UNCOMMITTED_MAX_WORKERS"
+	envTickTimeout = "FIND_UNCOMMITTED_TICK_TIMEOUT"
 )
 
 // UserConfig is the sticky TOML settings shared by CLI and agent.
@@ -37,6 +38,7 @@ type UserConfig struct {
 	StaleTTL    string `toml:"stale_ttl,omitempty"`
 	RedactPaths bool   `toml:"redact_paths,omitempty"`
 	MaxWorkers  int    `toml:"max_workers,omitempty"`
+	TickTimeout string `toml:"tick_timeout,omitempty"`
 }
 
 // ConfigSource identifies where a resolved value came from.
@@ -67,6 +69,8 @@ type FlagOverrides struct {
 	RedactPathsSet bool
 	MaxWorkers     int
 	MaxWorkersSet  bool
+	TickTimeout    string
+	TickTimeoutSet bool
 }
 
 // ResolvedSettings is the effective configuration after precedence resolution.
@@ -87,6 +91,8 @@ type ResolvedSettings struct {
 	RedactPathsSource ConfigSource
 	MaxWorkers        int
 	MaxWorkersSource  ConfigSource
+	TickTimeout       string
+	TickTimeoutSource ConfigSource
 }
 
 // DefaultConfigPath returns the platform user config file path.
@@ -158,6 +164,7 @@ func ResolveSettings(flags FlagOverrides, file UserConfig, getenv func(string) s
 	out.Interval, out.IntervalSource = resolveString(flags.Interval, flags.IntervalSet, getenv(envInterval), file.Interval)
 	out.Heartbeat, out.HeartbeatSource = resolveString(flags.Heartbeat, flags.HeartbeatSet, getenv(envHeartbeat), file.Heartbeat)
 	out.StaleTTL, out.StaleTTLSource = resolveString(flags.StaleTTL, flags.StaleTTLSet, getenv(envStaleTTL), file.StaleTTL)
+	out.TickTimeout, out.TickTimeoutSource = resolveString(flags.TickTimeout, flags.TickTimeoutSet, getenv(envTickTimeout), file.TickTimeout)
 
 	if flags.RedactPathsSet {
 		out.RedactPaths = flags.RedactPaths
@@ -240,10 +247,16 @@ func sha256Suffix(s string) [4]byte {
 	return out
 }
 
-// EnsureMachineIDInConfig writes machine_id when sticky config exists but the field is empty.
+// EnsureMachineIDInConfig writes machine_id when the sticky config's field is empty.
+// A missing config file is created holding just machine_id: an agent configured
+// only through env would otherwise mint a new random id on every start, leaving
+// ghost machines in the state repo and breaking the per-machine agent lock.
 func EnsureMachineIDInConfig(path, machineID string) error {
-	if path == "" || machineID == "" || !ConfigFileExists(path) {
+	if path == "" || machineID == "" {
 		return nil
+	}
+	if !ConfigFileExists(path) {
+		return SaveUserConfig(path, UserConfig{MachineID: machineID})
 	}
 	cfg, err := LoadUserConfig(path)
 	if err != nil {
@@ -256,23 +269,37 @@ func EnsureMachineIDInConfig(path, machineID string) error {
 	return SaveUserConfig(path, cfg)
 }
 
-// EnsureConfigFromAgent writes a sticky config if missing when agent has an explicit state repo.
+// EnsureConfigFromAgent writes a sticky config when agent has an explicit state
+// repo and the config has none yet. An existing file without state_repo (e.g.
+// the machine_id-only file EnsureMachineIDInConfig creates for env-only agents)
+// has its empty fields filled; a file that already names a state repo is kept.
 func EnsureConfigFromAgent(path string, stateRepo, scanRoot, machineID, interval, heartbeat, staleTTL string, redactPaths bool) error {
 	if path == "" || stateRepo == "" {
 		return nil
 	}
+	var cfg UserConfig
 	if ConfigFileExists(path) {
-		return nil
+		var err error
+		if cfg, err = LoadUserConfig(path); err != nil {
+			return err
+		}
+		if strings.TrimSpace(cfg.StateRepo) != "" {
+			return nil
+		}
 	}
-	return SaveUserConfig(path, UserConfig{
-		StateRepo:   stateRepo,
-		ScanRoot:    scanRoot,
-		MachineID:   machineID,
-		Interval:    interval,
-		Heartbeat:   heartbeat,
-		StaleTTL:    staleTTL,
-		RedactPaths: redactPaths,
-	})
+	fill := func(dst *string, v string) {
+		if strings.TrimSpace(*dst) == "" {
+			*dst = v
+		}
+	}
+	fill(&cfg.StateRepo, stateRepo)
+	fill(&cfg.ScanRoot, scanRoot)
+	fill(&cfg.MachineID, machineID)
+	fill(&cfg.Interval, interval)
+	fill(&cfg.Heartbeat, heartbeat)
+	fill(&cfg.StaleTTL, staleTTL)
+	cfg.RedactPaths = cfg.RedactPaths || redactPaths
+	return SaveUserConfig(path, cfg)
 }
 
 // minimumStaleTTL is the recommended lower bound for stale_ttl (2× heartbeat).

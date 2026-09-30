@@ -172,3 +172,17 @@ func TestFormatError(t *testing.T) {
 		})
 	}
 }
+
+func TestExecGitRunnerExtraEnvReachesGit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell alias test is unix-oriented")
+	}
+	r := ExecGitRunner{ExtraEnv: []string{"FU_TEST_EXTRA=batch"}}
+	out, stderr, err := r.Run(context.Background(), t.TempDir(), "-c", `alias.fuenv=!printf %s "$FU_TEST_EXTRA"`, "fuenv")
+	if err != nil {
+		t.Fatalf("run: %v (%s)", err, stderr)
+	}
+	if out != "batch" {
+		t.Fatalf("ExtraEnv not passed to git: got %q", out)
+	}
+}

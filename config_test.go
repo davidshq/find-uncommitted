@@ -231,6 +231,31 @@ func TestEnsureConfigFromAgent(t *testing.T) {
 	}
 }
 
+// An env-only first agent run leaves a machine_id-only file; a later
+// `agent --state-repo` must still persist its settings into it.
+func TestEnsureConfigFromAgentFillsMachineIDOnlyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := EnsureMachineIDInConfig(path, "box-1234abcd"); err != nil {
+		t.Fatalf("machine id: %v", err)
+	}
+	if err := EnsureConfigFromAgent(path, "/state", "/scan", "other-id", "2m", "15m", "30m", true); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	cfg, err := LoadUserConfig(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.StateRepo != "/state" || cfg.ScanRoot != "/scan" {
+		t.Fatalf("expected state_repo/scan_root filled, got %+v", cfg)
+	}
+	if cfg.MachineID != "box-1234abcd" {
+		t.Fatalf("existing machine_id must be kept, got %q", cfg.MachineID)
+	}
+	if cfg.Interval != "2m" || cfg.Heartbeat != "15m" || cfg.StaleTTL != "30m" || !cfg.RedactPaths {
+		t.Fatalf("expected remaining fields filled, got %+v", cfg)
+	}
+}
+
 func TestStaleTTLTooShort(t *testing.T) {
 	if !staleTTLTooShort(15*time.Minute, 20*time.Minute) {
 		t.Fatal("expected 20m stale with 15m heartbeat to be too short")
@@ -243,5 +268,37 @@ func TestStaleTTLTooShort(t *testing.T) {
 	}
 	if staleTTLTooShort(0, 5*time.Minute) || staleTTLTooShort(15*time.Minute, 0) {
 		t.Fatal("zero durations should not report too short")
+	}
+}
+
+// C-3: tick_timeout must resolve from sticky config and env, not only the flag,
+// or the scheduler-installed agent (bare `agent`) always used the 2m default.
+func TestResolveTickTimeout(t *testing.T) {
+	file := UserConfig{TickTimeout: "15m"}
+	r := ResolveSettings(FlagOverrides{}, file, func(string) string { return "" })
+	if r.TickTimeout != "15m" || r.TickTimeoutSource != SourceConfig {
+		t.Fatalf("config: got %q (%s)", r.TickTimeout, r.TickTimeoutSource)
+	}
+	r = ResolveSettings(FlagOverrides{}, file, func(k string) string {
+		if k == envTickTimeout {
+			return "5m"
+		}
+		return ""
+	})
+	if r.TickTimeout != "5m" || r.TickTimeoutSource != SourceEnv {
+		t.Fatalf("env: got %q (%s)", r.TickTimeout, r.TickTimeoutSource)
+	}
+	r = ResolveSettings(FlagOverrides{TickTimeout: "1m", TickTimeoutSet: true}, file, func(string) string { return "5m" })
+	if r.TickTimeout != "1m" || r.TickTimeoutSource != SourceFlag {
+		t.Fatalf("flag: got %q (%s)", r.TickTimeout, r.TickTimeoutSource)
+	}
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := SaveUserConfig(path, UserConfig{StateRepo: "/s", TickTimeout: "15m"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadUserConfig(path)
+	if err != nil || got.TickTimeout != "15m" {
+		t.Fatalf("round-trip: %+v %v", got, err)
 	}
 }

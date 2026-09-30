@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -104,9 +106,34 @@ func maybeRedactRepoSnapshot(snap RepoSnapshot, redactPaths bool) RepoSnapshot {
 	if !redactPaths {
 		return snap
 	}
+	snap.Error = redactErrorPaths(snap.Error, snap.Path)
 	snap.Path = redactPath(snap.Path)
 	snap.Origin = redactOrigin(snap.Origin)
 	return snap
+}
+
+// absPathToken matches an absolute path (Unix /x, Windows C:\x or C:/x) that
+// starts the text or follows whitespace, a quote or "(".
+var absPathToken = regexp.MustCompile(`(^|[\s'"(])(?:[A-Za-z]:)?[\\/][^\s'"]*`)
+
+// redactErrorPaths scrubs absolute paths from a published error message: the
+// repo path itself (which may contain spaces) first, then any other absolute
+// path token from git stderr, each reduced to its redacted basename form.
+func redactErrorPaths(msg, repoPath string) string {
+	if msg == "" {
+		return msg
+	}
+	if repoPath != "" {
+		msg = strings.ReplaceAll(msg, repoPath, redactPath(repoPath))
+		msg = strings.ReplaceAll(msg, slashPath(repoPath), redactPath(repoPath))
+	}
+	return absPathToken.ReplaceAllStringFunc(msg, func(m string) string {
+		prefix := ""
+		if strings.ContainsAny(m[:1], " \t\r\n'\"(") {
+			prefix, m = m[:1], m[1:]
+		}
+		return prefix + redactPath(m)
+	})
 }
 
 // loadRemoteSnapshots pulls the state clone (read-only) then loads on-disk machine
@@ -165,12 +192,14 @@ func BuildMachineSnapshot(machineID, scanRoot string, results []RepoSnapshot, st
 	}
 }
 
-func redactPath(path string) string {
-	base := filepath.Base(path)
-	if base == "" || base == "." || base == string(filepath.Separator) {
+// redactPath keeps only the basename, always "/"-separated so a redacted path
+// published from Windows reads the same as one from Linux/macOS.
+func redactPath(p string) string {
+	base := path.Base(slashPath(p))
+	if base == "" || base == "." || base == "/" || isDriveName(base) {
 		return "[redacted]"
 	}
-	return filepath.Join("…", base)
+	return "…/" + base
 }
 
 // WriteMachineSnapshot writes the machine snapshot JSON (pretty-printed).

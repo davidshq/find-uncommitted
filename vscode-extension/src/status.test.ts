@@ -150,4 +150,63 @@ describe("formatDetails", () => {
     assert.match(lines[2], /^  DMHP \(stale\): Clean on main/);
     assert.match(lines[3], /commit or stash/);
   });
+
+  it("prepends Checked when checkedAt is provided", () => {
+    const checkedAt = new Date(2026, 8, 29, 15, 11, 42);
+    const text = formatDetails([clear], checkedAt);
+    const lines = text.split("\n");
+    assert.equal(lines[0], "Checked: 2026-09-29 15:11:42");
+    assert.equal(lines[1], "");
+    assert.equal(lines[2], "a");
+  });
+
+  it("annotates local checked and remote published times on machine lines", () => {
+    const checkedAt = new Date(2026, 8, 29, 15, 11, 42);
+    const now = checkedAt;
+    const text = formatDetails(
+      [
+        {
+          kind: "attention",
+          folder: "/a",
+          elevated: true,
+          result: {
+            schemaVersion: 1,
+            ok: false,
+            attention: true,
+            project: "github.com/acme/app",
+            machines: [
+              {
+                id: "XPS",
+                local: true,
+                branch: "main",
+                is_dirty: true,
+                has_unstaged: true,
+              },
+              {
+                id: "DMHP",
+                local: false,
+                stale: true,
+                branch: "main",
+                is_clean: true,
+                updated_at: "2026-09-28T12:00:00Z",
+              },
+            ],
+            situations: [{ kind: "other_machine_work", nudge: "resolve" }],
+          },
+        },
+      ],
+      checkedAt,
+      now
+    );
+    const lines = text.split("\n");
+    assert.equal(lines[0], "Checked: 2026-09-29 15:11:42");
+    assert.match(
+      lines[3],
+      /^  XPS\*: Dirty on main \(unstaged\) · checked 2026-09-29 15:11:42$/
+    );
+    assert.match(
+      lines[4],
+      /^  DMHP \(stale\): Clean on main · published .+ \(.* ago\)$/
+    );
+  });
 });

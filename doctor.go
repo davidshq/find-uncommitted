@@ -118,7 +118,7 @@ func collectDoctorReport(ctx context.Context, in DoctorInput) doctorReport {
 			r.ok("state_repo: %s", in.StateRepo)
 			checkStateRepoRemote(ctx, &r, in.StateRepo)
 			checkSyncLock(&r, in.StateRepo)
-			checkLastPublish(&r, in)
+			checkLastPublish(ctx, &r, in)
 		}
 	}
 
@@ -168,7 +168,7 @@ func checkSyncLock(r *doctorReport, stateRepo string) {
 	r.ok("state-repo sync lock: free")
 }
 
-func checkLastPublish(r *doctorReport, in DoctorInput) {
+func checkLastPublish(ctx context.Context, r *doctorReport, in DoctorInput) {
 	path := SnapshotFilePath(in.StateRepo, in.MachineID)
 	snap, err := ReadMachineSnapshot(path)
 	if err != nil {
@@ -182,11 +182,33 @@ func checkLastPublish(r *doctorReport, in DoctorInput) {
 	age := in.Now.Sub(snap.UpdatedAt).Truncate(time.Second)
 	line := fmt.Sprintf("last publish: %s (%s ago, %d repos)",
 		snap.UpdatedAt.Format(time.RFC3339), age, len(snap.Repos))
+	// The local file can be fresh while peers still hold an older one (commit
+	// or push failing); that is exactly what doctor exists to catch.
+	if pending := unpublishedSnapshotReason(ctx, in.StateRepo, path); pending != "" {
+		r.warn("%s — %s; peers may still see an older snapshot", line, pending)
+		return
+	}
 	if in.StaleTTLDur > 0 && in.Now.Sub(snap.UpdatedAt) > in.StaleTTLDur {
 		r.warn("%s — stale vs stale_ttl %s", line, in.StaleTTL)
 		return
 	}
 	r.ok("%s", line)
+}
+
+// unpublishedSnapshotReason returns why the local snapshot may not have reached
+// the remote (uncommitted file or unpushed commits), or "" when it has.
+func unpublishedSnapshotReason(ctx context.Context, stateRepo, snapPath string) string {
+	if out, _, err := gitexec.Run(ctx, stateRepo, "status", "--porcelain", "--", snapPath); err == nil && strings.TrimSpace(out) != "" {
+		return "snapshot file not committed"
+	}
+	n, err := aheadOfUpstreamCount(ctx, SyncConfig{StateRepoDir: stateRepo})
+	switch {
+	case err == nil && n > 0:
+		return fmt.Sprintf("%d state-repo commit(s) not pushed", n)
+	case err != nil && !isNoUpstreamRevListError(err):
+		return fmt.Sprintf("could not verify push state (%v)", err)
+	}
+	return ""
 }
 
 func checkAgentLock(r *doctorReport, machineID string) {

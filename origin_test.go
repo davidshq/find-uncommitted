@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -91,5 +92,50 @@ func TestMaybeRedactRepoSnapshotRedactsOrigin(t *testing.T) {
 	}
 	if redacted.Origin != redactOrigin(status.Origin) {
 		t.Fatalf("redacted origin mismatch: %q", redacted.Origin)
+	}
+}
+
+// Y-4: a peer's published path uses the publisher's separators. Applying the
+// reader's filepath rules left a Windows path whole on Linux, so local-only
+// repos (no origin) never correlated between Windows and Linux machines.
+func TestRepoCorrelationKeyAcrossWindowsAndUnixPaths(t *testing.T) {
+	win := RepoSnapshot{Path: `C:\Users\dave\manuscripts\book`}
+	unix := RepoSnapshot{Path: "/home/dave/manuscripts/book"}
+	if got := pathBasenameIdentity(win.Path); got != "manuscripts/book" {
+		t.Fatalf("pathBasenameIdentity(windows) = %q, want manuscripts/book", got)
+	}
+	if repoCorrelationKey(win) != repoCorrelationKey(unix) {
+		t.Fatalf("windows %q vs unix %q keys differ", repoCorrelationKey(win), repoCorrelationKey(unix))
+	}
+	// Redacted paths published from Windows (…\book) read the same as from Unix.
+	if pathBasenameIdentity(`…\book`) != pathBasenameIdentity("…/book") {
+		t.Fatalf("redacted identities differ: %q vs %q", pathBasenameIdentity(`…\book`), pathBasenameIdentity("…/book"))
+	}
+	if got := redactPath(`C:\Users\dave\manuscripts\book`); got != "…/book" {
+		t.Fatalf("redactPath(windows) = %q, want …/book", got)
+	}
+}
+
+// Y-1: --redact-paths redacted Path/Origin but published Error verbatim, which
+// carries absolute paths (dubious-ownership hint, git stderr).
+func TestMaybeRedactRepoSnapshotScrubsErrorPaths(t *testing.T) {
+	repo := "/home/dave/clients/acme-secret"
+	cases := []RepoSnapshot{
+		{Path: repo, Error: "Git ownership issue - run: git config --global --add safe.directory " + repo},
+		{Path: repo, Error: "Not a valid git repository: not a git repository: '/home/dave/clients/.git'"},
+		{Path: `C:\Users\dave\clients\acme-secret`, Error: `Git ownership issue - run: git config --global --add safe.directory C:/Users/dave/clients/acme-secret`},
+	}
+	for _, c := range cases {
+		got := maybeRedactRepoSnapshot(c, true).Error
+		if strings.Contains(got, "dave") || strings.Contains(got, "clients/") {
+			t.Fatalf("redacted Error still leaks a path: %q", got)
+		}
+		if got == "" {
+			t.Fatal("redaction must keep an error signal")
+		}
+	}
+	plain := RepoSnapshot{Path: repo, Error: "x " + repo}
+	if maybeRedactRepoSnapshot(plain, false).Error != plain.Error {
+		t.Fatal("non-redacted publish must keep Error verbatim")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // checkJSONSchemaVersion is the stable contract for editor/script consumers.
@@ -28,6 +29,8 @@ type CheckJSONMachine struct {
 	ID                   string `json:"id"`
 	Local                bool   `json:"local"`
 	Stale                bool   `json:"stale,omitempty"`
+	// UpdatedAt is the remote snapshot publish time (RFC3339). Omitted for live local rows.
+	UpdatedAt            string `json:"updated_at,omitempty"`
 	Path                 string `json:"path,omitempty"`
 	Origin               string `json:"origin,omitempty"`
 	Branch               string `json:"branch,omitempty"`
@@ -83,7 +86,7 @@ func buildCheckJSONResult(label string, rows []AggregateRow, situations []Situat
 
 func checkJSONMachineFromRow(row AggregateRow) CheckJSONMachine {
 	r := row.Repo
-	return CheckJSONMachine{
+	m := CheckJSONMachine{
 		ID:                   row.Machine,
 		Local:                row.Local,
 		Stale:                row.Stale,
@@ -104,6 +107,10 @@ func checkJSONMachineFromRow(row AggregateRow) CheckJSONMachine {
 		IsEmpty:              r.IsEmpty,
 		Error:                r.Error,
 	}
+	if !row.UpdatedAt.IsZero() {
+		m.UpdatedAt = row.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	return m
 }
 
 func printCheckJSON(result CheckJSONResult) error {

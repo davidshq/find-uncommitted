@@ -155,6 +155,7 @@ func orderCheckRows(rows []AggregateRow) []AggregateRow {
 // printCheckSummary prints project label then one line per machine (local first).
 func printCheckSummary(label string, rows []AggregateRow) {
 	fmt.Println(label)
+	now := time.Now()
 	n := 0
 	for _, row := range orderCheckRows(rows) {
 		if row.LoadError != "" {
@@ -168,7 +169,13 @@ func printCheckSummary(label string, rows []AggregateRow) {
 		if row.Stale {
 			machine += " (stale)"
 		}
-		fmt.Printf("  %s: %s\n", machine, formatCheckMachineCell(row.Repo))
+		cell := formatCheckMachineCell(row.Repo)
+		if row.Local {
+			cell += formatCheckedSuffix(now)
+		} else if suffix := formatPublishedSuffix(row.UpdatedAt, now); suffix != "" {
+			cell += suffix
+		}
+		fmt.Printf("  %s: %s\n", machine, cell)
 	}
 	if n == 0 {
 		fmt.Println("  (no status)")

@@ -16,6 +16,8 @@ export interface CheckJSONMachine {
   id: string;
   local: boolean;
   stale?: boolean;
+  /** Remote snapshot publish time (RFC3339). Omitted for live local rows. */
+  updated_at?: string;
   path?: string;
   origin?: string;
   branch?: string;
@@ -66,8 +68,79 @@ export function isElevated(result: CheckJSONResult): boolean {
   return (result.situations ?? []).some((s) => CROSS_MACHINE_KINDS.has(s.kind));
 }
 
-export function formatDetails(outcomes: FolderOutcome[]): string {
+/** Local wall-clock stamp for Output channel freshness lines. */
+export function formatCheckedAt(checkedAt: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const y = checkedAt.getFullYear();
+  const mo = pad(checkedAt.getMonth() + 1);
+  const d = pad(checkedAt.getDate());
+  const h = pad(checkedAt.getHours());
+  const mi = pad(checkedAt.getMinutes());
+  const s = pad(checkedAt.getSeconds());
+  return `${y}-${mo}-${d} ${h}:${mi}:${s}`;
+}
+
+/** Compact relative age matching CLI formatCompactAge (e.g. "45s", "12m", "3h20m", "2d"). */
+export function formatCompactAge(ms: number): string {
+  let d = Math.abs(ms);
+  d = Math.floor(d / 1000) * 1000;
+  const sec = Math.floor(d / 1000);
+  if (sec < 60) {
+    return `${sec}s`;
+  }
+  const min = Math.floor(sec / 60);
+  if (min < 60) {
+    return `${min}m`;
+  }
+  const hours = Math.floor(min / 60);
+  if (hours < 48) {
+    const remMin = min % 60;
+    return remMin === 0 ? `${hours}h` : `${hours}h${remMin}m`;
+  }
+  return `${Math.floor(hours / 24)}d`;
+}
+
+/**
+ * Annotate a remote machine line with publish wall-clock + relative age.
+ * Returns "" when updated_at is missing/unparseable (live local rows).
+ */
+export function formatPublishedSuffix(
+  updatedAt: string | undefined,
+  now: Date = new Date()
+): string {
+  if (!updatedAt?.trim()) {
+    return "";
+  }
+  const t = new Date(updatedAt);
+  if (Number.isNaN(t.getTime())) {
+    return "";
+  }
+  return ` · published ${formatCheckedAt(t)} (${formatCompactAge(now.getTime() - t.getTime())} ago)`;
+}
+
+/** Annotate a live local machine line with this check’s wall-clock time. */
+export function formatCheckedSuffix(checkedAt: Date | undefined): string {
+  if (!checkedAt) {
+    return "";
+  }
+  return ` · checked ${formatCheckedAt(checkedAt)}`;
+}
+
+/**
+ * Human-readable Output channel body for the latest check.
+ * When `checkedAt` is set, a “Checked” header is prepended and local machine
+ * lines include that time. Remote machine lines include snapshot publish time.
+ */
+export function formatDetails(
+  outcomes: FolderOutcome[],
+  checkedAt?: Date,
+  now: Date = new Date()
+): string {
   const lines: string[] = [];
+  if (checkedAt) {
+    lines.push(`Checked: ${formatCheckedAt(checkedAt)}`);
+    lines.push("");
+  }
   for (const o of outcomes) {
     if (o.kind === "missing_binary") {
       lines.push(o.message);
@@ -97,7 +170,7 @@ export function formatDetails(outcomes: FolderOutcome[]): string {
       return a.id.localeCompare(b.id);
     });
     for (const m of machines) {
-      lines.push(`  ${formatMachineLine(m)}`);
+      lines.push(`  ${formatMachineLine(m, now, checkedAt)}`);
     }
     if (machines.length === 0) {
       lines.push("  (no machine status)");
@@ -116,7 +189,11 @@ export function formatDetails(outcomes: FolderOutcome[]): string {
   return lines.join("\n").trimEnd();
 }
 
-function formatMachineLine(m: CheckJSONMachine): string {
+function formatMachineLine(
+  m: CheckJSONMachine,
+  now: Date = new Date(),
+  checkedAt?: Date
+): string {
   let id = m.id;
   if (m.local) {
     id += "*";
@@ -125,7 +202,13 @@ function formatMachineLine(m: CheckJSONMachine): string {
     id += " (stale)";
   }
   // Match CLI printCheckSummary / formatCheckMachineCell (plain repoStatusText).
-  return `${id}: ${formatCheckMachineCell(m)}`;
+  let cell = formatCheckMachineCell(m);
+  if (m.local) {
+    cell += formatCheckedSuffix(checkedAt);
+  } else {
+    cell += formatPublishedSuffix(m.updated_at, now);
+  }
+  return `${id}: ${cell}`;
 }
 
 /** Mirrors Go formatCheckMachineCell / repoStatusText(plain) + branch assembly. */

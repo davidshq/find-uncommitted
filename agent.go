@@ -190,7 +190,12 @@ func smokePublishOnce(cfg AgentConfig) (string, error) {
 // publishAgentSnapshot scans and publishes one machine snapshot.
 func publishAgentSnapshot(ctx context.Context, cfg AgentConfig) (MachineSnapshot, bool, error) {
 	started := time.Now()
-	repos := findGitReposContext(ctx, cfg.ScanRoot, cfg.StateRepoDir)
+	repos, err := findGitReposContext(ctx, cfg.ScanRoot, cfg.StateRepoDir)
+	if err != nil {
+		// A missing/unmounted root must not publish an empty "all clear"
+		// snapshot; keep the last good one so peers see it age instead.
+		return MachineSnapshot{}, false, fmt.Errorf("agent scan skipped, not publishing: %w", err)
+	}
 	if err := ctx.Err(); err != nil {
 		return MachineSnapshot{}, false, fmt.Errorf("agent scan cancelled: %w", err)
 	}

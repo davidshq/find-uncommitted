@@ -2,7 +2,7 @@
   "name": "find-uncommitted",
   "displayName": "Find Uncommitted",
   "description": "Cross-machine git attention nudges via the find-uncommitted CLI (status bar thin client).",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "publisher": "find-uncommitted",
   "repository": {
     "type": "git",

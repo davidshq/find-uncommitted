@@ -63,6 +63,8 @@ type GitRunner interface {
 type ExecGitRunner struct {
 	// Timeout overrides DefaultCommandTimeout when > 0.
 	Timeout time.Duration
+	// ExtraEnv is appended to the inherited environment (e.g. GIT_SSH_COMMAND).
+	ExtraEnv []string
 }
 
 func (r ExecGitRunner) commandTimeout() time.Duration {
@@ -87,7 +89,7 @@ func (r ExecGitRunner) Run(ctx context.Context, dir string, args ...string) (str
 	cmd := exec.CommandContext(cmdCtx, "git", args...)
 	cmd.Dir = dir
 	cmd.Stdin = nil
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0"), r.ExtraEnv...)
 	configureGitCmdCancel(cmd)
 
 	var stdout, stderr bytes.Buffer

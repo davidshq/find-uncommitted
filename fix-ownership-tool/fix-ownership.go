@@ -28,7 +28,11 @@ func main() {
 	fmt.Println("This will automatically fix ownership issues...")
 	fmt.Println()
 
-	repos := discover.FindGitRepos(rootDir, discover.WalkOptions{Debug: debugMode})
+	repos, err := discover.FindGitRepos(rootDir, discover.WalkOptions{Debug: debugMode})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 
 	if len(repos) == 0 {
 		fmt.Println("No git repositories found.")

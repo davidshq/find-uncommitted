@@ -44,6 +44,23 @@ func classifyUpstreamFailure(stderr string, err error) (untrackedUpstream bool, 
 	return false, "Failed to check upstream tracking: " + gitexec.FormatError(stderr, err)
 }
 
+// upstreamGone reports a configured upstream whose tracking ref no longer
+// exists — the branch was merged and pruned (`git status` shows "[gone]").
+// Checked structurally rather than by stderr text, which varies by git version.
+func upstreamGone(ctx context.Context, repoPath, branch string) bool {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return false
+	}
+	out, _, err := gitexec.Run(ctx, repoPath, "for-each-ref", "--format=%(upstream)", "refs/heads/"+branch)
+	ref := strings.TrimSpace(out)
+	if err != nil || ref == "" {
+		return false
+	}
+	_, _, err = gitexec.Run(ctx, repoPath, "rev-parse", "--verify", "--quiet", ref)
+	return err != nil && !gitexec.IsContextErr(ctx, err)
+}
+
 func invalidRepositoryError(stderr string, err error) string {
 	detail := gitexec.FormatError(stderr, err)
 	if detail == "" || detail == "unknown git error" {

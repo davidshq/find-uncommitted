@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseCheckArgsJSON(t *testing.T) {
@@ -71,6 +72,42 @@ func TestBuildCheckJSONDistinguishesLocalRemote(t *testing.T) {
 	}
 	if !sawLocal || !sawRemote {
 		t.Fatalf("expected local and remote markers: %+v", got.Machines)
+	}
+}
+
+func TestBuildCheckJSONIncludesRemoteUpdatedAt(t *testing.T) {
+	updated := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	rows := []AggregateRow{
+		{Machine: "laptop", Local: true, Repo: RepoSnapshot{Origin: "github.com/acme/app", Branch: "main", IsClean: true}},
+		{
+			Machine:   "desktop",
+			Local:     false,
+			UpdatedAt: updated,
+			Stale:     true,
+			Repo:      RepoSnapshot{Origin: "github.com/acme/app", Branch: "main", IsDirty: true, HasUnstaged: true},
+		},
+	}
+	got := buildCheckJSONResult("app", rows, nil)
+	var remote *CheckJSONMachine
+	for i := range got.Machines {
+		if !got.Machines[i].Local {
+			remote = &got.Machines[i]
+			break
+		}
+	}
+	if remote == nil {
+		t.Fatal("expected remote machine")
+	}
+	if remote.UpdatedAt != "2026-09-28T12:00:00Z" {
+		t.Fatalf("updated_at=%q", remote.UpdatedAt)
+	}
+	if !remote.Stale {
+		t.Fatal("expected stale")
+	}
+	for _, m := range got.Machines {
+		if m.Local && m.UpdatedAt != "" {
+			t.Fatalf("local should omit updated_at: %+v", m)
+		}
 	}
 }
 

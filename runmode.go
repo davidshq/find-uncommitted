@@ -119,7 +119,7 @@ func shouldPersistStableMachineID(resolved ResolvedSettings, file UserConfig, fl
 	return installSched || agentMode
 }
 
-func stickyConfigFromRun(stateRepo, scanRoot, machineID, intervalStr, heartbeatStr, staleTTLStr string, redactPaths bool, maxWorkers int) UserConfig {
+func stickyConfigFromRun(stateRepo, scanRoot, machineID, intervalStr, heartbeatStr, staleTTLStr, tickTimeoutStr string, redactPaths bool, maxWorkers int) UserConfig {
 	return UserConfig{
 		StateRepo:   stateRepo,
 		ScanRoot:    scanRoot,
@@ -129,6 +129,7 @@ func stickyConfigFromRun(stateRepo, scanRoot, machineID, intervalStr, heartbeatS
 		StaleTTL:    staleTTLStr,
 		RedactPaths: redactPaths,
 		MaxWorkers:  maxWorkers,
+		TickTimeout: tickTimeoutStr,
 	}
 }
 

@@ -25,6 +25,10 @@ The system SHALL execute every git subprocess used for repository scanning and s
 - **WHEN** git would otherwise wait for an interactive terminal credential prompt during a scan or sync
 - **THEN** the invocation does not block indefinitely waiting for TTY input
 
+#### Scenario: Viewer state-repo pull fails fast
+- **WHEN** `check` or an interactive aggregate pulls the state repo read-only and the remote is unreachable or ssh would prompt for a passphrase
+- **THEN** the pull uses a short deadline and, unless the user configured their own ssh command (`GIT_SSH_COMMAND`, `GIT_SSH`, `core.sshCommand`), runs ssh with `BatchMode=yes` and a short `ConnectTimeout`, then falls back to on-disk snapshots
+
 #### Scenario: Cancelled scan stops scheduling further repos
 - **WHEN** the parent scan context is cancelled while repository status checks are in flight
 - **THEN** the worker pool does not schedule remaining unscanned repositories and does not start new git subprocesses for those paths

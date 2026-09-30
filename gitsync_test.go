@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -577,5 +578,31 @@ func TestSmokePublishOnceWritesSnapshot(t *testing.T) {
 	}
 	if _, err := ReadMachineSnapshot(path); err != nil {
 		t.Fatalf("snapshot not readable after smoke: %v", err)
+	}
+}
+
+// C-6: the viewer pull (check / cd hook) must not hang on an unreachable host
+// or prompt for an ssh passphrase, but a user's own ssh command must win.
+func TestViewerSSHEnv(t *testing.T) {
+	repo := initTempGitRepo(t)
+	t.Setenv("GIT_SSH_COMMAND", "")
+	t.Setenv("GIT_SSH", "")
+
+	env := viewerSSHEnv(context.Background(), repo)
+	if len(env) != 1 || !strings.Contains(env[0], "BatchMode=yes") || !strings.Contains(env[0], "ConnectTimeout=") {
+		t.Fatalf("expected fail-fast ssh command, got %v", env)
+	}
+
+	t.Setenv("GIT_SSH_COMMAND", "ssh -i ~/.ssh/special")
+	if env := viewerSSHEnv(context.Background(), repo); env != nil {
+		t.Fatalf("user GIT_SSH_COMMAND must win, got %v", env)
+	}
+	t.Setenv("GIT_SSH_COMMAND", "")
+
+	if out, err := exec.Command("git", "-C", repo, "config", "core.sshCommand", "ssh -i key").CombinedOutput(); err != nil {
+		t.Fatalf("git config: %v (%s)", err, out)
+	}
+	if env := viewerSSHEnv(context.Background(), repo); env != nil {
+		t.Fatalf("core.sshCommand must win, got %v", env)
 	}
 }

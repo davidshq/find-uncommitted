@@ -109,8 +109,32 @@ func PullStateRepoReadOnly(ctx context.Context, cfg SyncConfig) error {
 	return pullStateRepoReadOnlyLocked(ctx, cfg)
 }
 
+// readOnlyPullTimeout bounds the viewer pull (check, cd hook, extension). A
+// slightly stale answer beats a hung `cd`; the agent keeps the clone fresh.
+const readOnlyPullTimeout = 10 * time.Second
+
+// viewerSSHCommand makes ssh fail fast instead of prompting on /dev/tty
+// (GIT_TERMINAL_PROMPT does not stop ssh's own passphrase/host-key prompts) or
+// waiting on an unreachable host.
+const viewerSSHCommand = "ssh -o BatchMode=yes -o ConnectTimeout=5"
+
+// viewerSSHEnv returns GIT_SSH_COMMAND for viewer pulls unless the user already
+// chose an ssh command (GIT_SSH_COMMAND, GIT_SSH or core.sshCommand), which wins.
+func viewerSSHEnv(ctx context.Context, stateRepo string) []string {
+	if os.Getenv("GIT_SSH_COMMAND") != "" || os.Getenv("GIT_SSH") != "" {
+		return nil
+	}
+	if out, _, err := gitexec.Run(ctx, stateRepo, "config", "--get", "core.sshCommand"); err == nil && strings.TrimSpace(out) != "" {
+		return nil
+	}
+	return []string{"GIT_SSH_COMMAND=" + viewerSSHCommand}
+}
+
 func pullStateRepoReadOnlyLocked(ctx context.Context, cfg SyncConfig) error {
 	r := cfg.runner()
+	if cfg.Runner == nil {
+		r = gitexec.ExecGitRunner{Timeout: readOnlyPullTimeout, ExtraEnv: viewerSSHEnv(ctx, cfg.StateRepoDir)}
+	}
 	_, stderr, err := r.Run(ctx, cfg.StateRepoDir, "pull", "--ff-only")
 	if err != nil {
 		return SyncWarning{

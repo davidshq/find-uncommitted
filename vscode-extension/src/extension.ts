@@ -17,6 +17,8 @@ import { FolderOutcome, formatDetails } from "./types";
 let statusBar: vscode.StatusBarItem;
 let output: vscode.OutputChannel;
 let lastOutcomes: FolderOutcome[] = [];
+/** Wall time of the last completed check (used by Show Details / Output). */
+let lastCheckedAt: Date | undefined;
 let generation = 0;
 let abortController: AbortController | undefined;
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
@@ -127,12 +129,13 @@ async function refresh(_reason: string): Promise<boolean> {
       message: missingBinaryMessage(resolved),
     };
     lastOutcomes = [outcome];
+    lastCheckedAt = new Date();
     if (myGen !== generation) {
       return false;
     }
     applyStatusBar(statusBar, "setup", lastOutcomes, hideWhenClear);
     output.clear();
-    output.appendLine(outcome.message);
+    output.appendLine(formatDetails(lastOutcomes, lastCheckedAt));
     return true;
   }
 
@@ -170,12 +173,13 @@ async function refresh(_reason: string): Promise<boolean> {
   }
 
   lastOutcomes = outcomes;
+  lastCheckedAt = new Date();
   const tier = tierFromOutcomes(outcomes);
   applyStatusBar(statusBar, tier, outcomes, hideWhenClear);
   void maybeShowAttentionNotification(outcomes);
 
   output.clear();
-  output.appendLine(formatDetails(outcomes));
+  output.appendLine(formatDetails(outcomes, lastCheckedAt));
   return true;
 }
 
@@ -223,12 +227,12 @@ function showDetails(): void {
         return;
       }
       output.clear();
-      output.appendLine(formatDetails(lastOutcomes));
+      output.appendLine(formatDetails(lastOutcomes, lastCheckedAt));
       output.show(true);
     });
     return;
   }
   output.clear();
-  output.appendLine(formatDetails(lastOutcomes));
+  output.appendLine(formatDetails(lastOutcomes, lastCheckedAt));
   output.show(true);
 }

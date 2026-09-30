@@ -12,9 +12,11 @@ import (
 
 // AggregateRow is one repo row in the combined local + remote view.
 type AggregateRow struct {
-	Machine   string
-	Stale     bool
-	Local     bool
+	Machine string
+	Stale   bool
+	Local   bool
+	// UpdatedAt is the remote machine snapshot publish time (zero for live local rows).
+	UpdatedAt time.Time
 	Repo      RepoSnapshot
 	LoadError string
 }
@@ -43,9 +45,10 @@ func BuildAggregateRows(localMachine string, localResults []RepoSnapshot, remote
 		}
 		for _, repo := range item.Snapshot.Repos {
 			rows = append(rows, AggregateRow{
-				Machine: item.Snapshot.MachineID,
-				Stale:   item.Stale,
-				Repo:    repo,
+				Machine:   item.Snapshot.MachineID,
+				Stale:     item.Stale,
+				UpdatedAt: item.Snapshot.UpdatedAt,
+				Repo:      repo,
 			})
 		}
 	}

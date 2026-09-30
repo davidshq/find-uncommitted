@@ -51,29 +51,40 @@ describe("outcomeFromRun", () => {
     }
   });
 
-  it("maps exit 2 without JSON to elevated attention (not quiet local)", () => {
+  it("maps exit 2 without JSON to error, not a cross-machine alert", () => {
     const o = outcomeFromRun("/repo", {
       exitCode: 2,
       stdout: "laptop*: clean  ·  desktop: dirty\n→ unfinished work on desktop",
       stderr: "",
     });
-    assert.equal(o.kind, "attention");
-    if (o.kind === "attention") {
-      assert.equal(o.elevated, true);
-      assert.match(o.result.situations?.[0]?.nudge ?? "", /desktop/);
-    }
+    assert.equal(o.kind, "error");
   });
 
-  it("maps exit 2 empty stdout to elevated attention with fallback nudge", () => {
+  it("maps exit 2 empty stdout to error with a message", () => {
     const o = outcomeFromRun("/repo", {
       exitCode: 2,
       stdout: "",
       stderr: "",
     });
-    assert.equal(o.kind, "attention");
-    if (o.kind === "attention") {
-      assert.equal(o.elevated, true);
-      assert.match(o.result.situations?.[0]?.nudge ?? "", /unparseable/);
+    assert.equal(o.kind, "error");
+    if (o.kind === "error") {
+      assert.match(o.message, /without JSON/);
+    }
+  });
+
+  // E-1: a Go panic / fatal error exits 2 with empty stdout. It used to paint
+  // "FU · other machine" and pop the cross-machine notification.
+  it("maps a Go panic (exit 2, stderr only) to error, not elevated attention", () => {
+    const o = outcomeFromRun("/repo", {
+      exitCode: 2,
+      stdout: "",
+      stderr:
+        "panic: runtime error: index out of range [0] with length 0\n\ngoroutine 1 [running]:\nmain.main()\n",
+    });
+    assert.equal(o.kind, "error");
+    if (o.kind === "error") {
+      assert.match(o.message, /panic: runtime error/);
+      assert.match(o.stderr ?? "", /goroutine 1/);
     }
   });
 

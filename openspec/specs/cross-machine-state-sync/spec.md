@@ -59,6 +59,10 @@ The system SHALL support an autonomous background mode that periodically scans l
 - **WHEN** a check tick finds snapshot content unchanged and the heartbeat window is not due
 - **THEN** the system does not create a commit solely because the check interval elapsed
 
+#### Scenario: Missing or unreadable scan root
+- **WHEN** the scan root does not exist, cannot be read, or is not a directory
+- **THEN** the scan fails with an error (interactive scan exits non-zero) and the agent skips that tick's publish, keeping the last good snapshot instead of publishing an empty one; a symlinked scan root is followed and repos are reported under the path as given
+
 ### Requirement: Cancellable deadline-bounded agent ticks
 Each autonomous publish tick SHALL run under a cancellable context with a per-tick deadline derived from the agent’s parent context (signal cancellation). When the tick deadline expires, the system SHALL abort in-flight git work for that tick, log a non-fatal warning, and continue the agent loop. The wait between ticks SHALL use a reusable interval ticker rather than a one-shot timer recreated each cycle.
 
@@ -104,6 +108,10 @@ Each published repository entry SHALL include a normalized `origin` remote URL w
 - **WHEN** `--redact-paths` is enabled and a repository has an origin
 - **THEN** the published `origin` is a stable hash of the normalized URL so machines can still correlate without exposing the raw remote
 
+#### Scenario: Redacted error text has no absolute paths
+- **WHEN** `--redact-paths` is enabled and a repository has an `error`
+- **THEN** absolute paths in the published `error` (the repo path and any path from git stderr) are reduced to the redacted basename form, while the error itself is still published
+
 ### Requirement: Behind-upstream and tip metadata in scans and snapshots
 Each scanned repository with a configured upstream SHALL report whether it is behind that upstream using already-known tracking refs (no mandatory fetch). Published snapshots SHALL include behind status, optional ahead/behind counts, and a short HEAD SHA when available. Older snapshots missing these fields SHALL still load; absent behind/SHA fields SHALL be treated as unknown/false rather than failing parse.
 
@@ -138,6 +146,10 @@ When presenting results, the CLI SHALL print an Attention section before the ful
 - **WHEN** the local clone and another machine's snapshot for the same origin report different branch names
 - **THEN** Attention includes a branch-mismatch nudge naming the other branch and machine
 
+#### Scenario: Sibling worktrees do not raise branch mismatch
+- **WHEN** another machine holds the project in several working trees (linked worktrees) and at least one of them is on a branch checked out locally, or either side is on a detached HEAD
+- **THEN** no branch-mismatch nudge is raised for that machine; a mismatch names only machines with no tree on a local branch
+
 #### Scenario: Same-branch tip mismatch
 - **WHEN** local and remote snapshots share a branch name but different short HEAD SHAs
 - **THEN** Attention includes a tip-mismatch nudge
@@ -164,6 +176,10 @@ For repositories without an `origin` remote, correlation SHALL use parent-direct
 #### Scenario: Matching layout correlates across machines
 - **WHEN** two machines have local-only clones at `.../manuscripts/book`
 - **THEN** those entries share a correlation key
+
+#### Scenario: Windows and Unix paths correlate
+- **WHEN** one machine publishes `C:\Users\dave\manuscripts\book` and another `/home/dave/manuscripts/book`
+- **THEN** both `\` and `/` are treated as separators regardless of the reader's OS and the entries share a correlation key; redacted paths are always published `/`-separated (`…/book`)
 
 ### Requirement: Snapshot freshness signaling
 The CLI SHALL mark machine snapshots as stale when their last update time exceeds a configurable staleness threshold. When the threshold is unset, the built-in default SHALL be `30m`.
