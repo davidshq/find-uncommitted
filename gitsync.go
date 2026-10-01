@@ -156,6 +156,11 @@ func pullStateRepoReadOnlyLocked(ctx context.Context, cfg SyncConfig) error {
 // force a commit when the snapshot path is already dirty (orphan recovery).
 // When content is unchanged and the worktree is clean, still push if local
 // commits are ahead of upstream (e.g. previous tick committed but failed to push).
+//
+// Backlog gate: when local is known to be ahead, flush before committing and
+// skip the commit if the flush fails. Otherwise a deterministically stuck push
+// adds one local commit per heartbeat (742 in the 2026-09-29 XPS incident).
+// The scan is rebuilt every tick, so skipping a commit loses nothing.
 func PublishLocalSnapshot(ctx context.Context, cfg SyncConfig, snap MachineSnapshot) (published bool, err error) {
 	path := SnapshotFilePath(cfg.StateRepoDir, cfg.MachineID)
 	prev, readErr := ReadMachineSnapshot(path)
@@ -181,6 +186,17 @@ func PublishLocalSnapshot(ctx context.Context, cfg SyncConfig, snap MachineSnaps
 		} else {
 			pushed, err := pushIfAhead(ctx, cfg)
 			return pushed, err
+		}
+	}
+
+	// Only gate on a known backlog: rev-list also fails on a fresh clone of an
+	// empty remote, and that first publish must still commit.
+	if n, aheadErr := aheadOfUpstreamCount(ctx, cfg); aheadErr == nil && n > 0 {
+		if err := rebaseAndPush(ctx, cfg); err != nil {
+			return false, SyncWarning{
+				Message: fmt.Sprintf("state repo publish blocked: %d local commit(s) not pushed; not adding another until push succeeds", n),
+				Err:     err,
+			}
 		}
 	}
 

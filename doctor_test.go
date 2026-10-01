@@ -97,6 +97,34 @@ func TestCollectDoctorReportWithStateRepo(t *testing.T) {
 	if !strings.Contains(joined, "OK   state-repo sync lock: free") {
 		t.Fatalf("expected sync lock free:\n%s", joined)
 	}
+	// Doctor itself takes the sync lock; it must not create a worktree file.
+	if !strings.Contains(joined, "OK   state-repo worktree: no untracked files") {
+		t.Fatalf("expected clean worktree:\n%s", joined)
+	}
+}
+
+func TestCollectDoctorReportWarnsOnUntrackedStateRepoFiles(t *testing.T) {
+	state := initTempGitRepo(t)
+	for _, name := range []string{".gitignore", legacyStateRepoSyncLockName} {
+		if err := os.WriteFile(filepath.Join(state, name), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in := DoctorInput{
+		MachineID:   "m",
+		StateRepo:   state,
+		Interval:    DefaultIntervalString,
+		Heartbeat:   DefaultHeartbeatString,
+		StaleTTL:    DefaultStaleTTLString,
+		StaleTTLDur: DefaultStaleTTL,
+		TickTimeout: DefaultTickTimeoutString,
+		Now:         time.Now().UTC(),
+	}
+	report := collectDoctorReport(context.Background(), in)
+	joined := strings.Join(report.lines, "\n")
+	if !strings.Contains(joined, "WARN state-repo worktree has untracked files (.gitignore)") {
+		t.Fatalf("expected untracked .gitignore warn (legacy lock ignored):\n%s", joined)
+	}
 }
 
 func TestCollectDoctorReportInvalidStateRepo(t *testing.T) {

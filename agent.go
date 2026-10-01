@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -103,11 +104,15 @@ func RunAgentLoop(cfg AgentConfig) error {
 	ticker := time.NewTicker(cfg.Interval)
 	defer ticker.Stop()
 
+	var streak tickFailStreak
 	// Immediate publish on startup, then wait between ticks on the ticker.
 	for {
 		tickCtx, cancel := context.WithTimeout(ctx, cfg.tickTimeout())
-		runAgentTick(tickCtx, cfg)
+		tickErr := runAgentTick(tickCtx, cfg)
 		cancel()
+		if msg := streak.record(tickErr, time.Now()); msg != "" {
+			fmt.Fprintln(os.Stderr, msg)
+		}
 
 		select {
 		case <-ctx.Done():
@@ -118,7 +123,56 @@ func RunAgentLoop(cfg AgentConfig) error {
 	}
 }
 
-func runAgentTick(ctx context.Context, cfg AgentConfig) {
+// tickFailStreak escalates consecutive failed ticks. Each failure already logs
+// a warning, but a deterministic failure looks identical to transient noise:
+// XPS logged the same "will retry later" pair 1,861 times over 31h unnoticed.
+type tickFailStreak struct {
+	count int
+	since time.Time
+}
+
+const (
+	agentStuckEscalateAfter = 5  // consecutive failed ticks before the first ERROR
+	agentStuckRepeatEvery   = 60 // then repeat every N failed ticks
+)
+
+// record returns a line to log (or "") for this tick's outcome.
+func (s *tickFailStreak) record(err error, now time.Time) string {
+	if err == nil {
+		if s.count == 0 {
+			return ""
+		}
+		msg := fmt.Sprintf("agent recovered after %d consecutive failed ticks (since %s)",
+			s.count, s.since.Format(time.RFC3339))
+		*s = tickFailStreak{}
+		return msg
+	}
+	if s.count == 0 {
+		s.since = now
+	}
+	s.count++
+	if s.count < agentStuckEscalateAfter || (s.count-agentStuckEscalateAfter)%agentStuckRepeatEvery != 0 {
+		return ""
+	}
+	return fmt.Sprintf("ERROR: agent has failed %d consecutive ticks since %s; peers see a stale snapshot for this machine. "+
+		"Last error: %v. Run `find-uncommitted doctor`; recovery runbook: docs/plan-state-repo-publish-snowball.md#recovery-runbook",
+		s.count, s.since.Format(time.RFC3339), oneLine(err.Error(), 300))
+}
+
+// oneLine flattens multi-line git stderr for a single log line. Git lists the
+// offending paths on the lines after "would be overwritten by checkout:", so
+// truncating at the first newline would drop exactly the actionable part.
+func oneLine(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > max {
+		return string(r[:max]) + " …"
+	}
+	return s
+}
+
+// runAgentTick scans and publishes once. Returns the error that stopped the
+// publish (already logged), or nil when the tick published or had nothing to do.
+func runAgentTick(ctx context.Context, cfg AgentConfig) error {
 	warn := func(format string, args ...any) {
 		fmt.Fprintf(os.Stderr, "warning: "+format+"\n", args...)
 	}
@@ -126,7 +180,7 @@ func runAgentTick(ctx context.Context, cfg AgentConfig) {
 	lock, err := acquireStateRepoSyncLockBlocking(ctx, cfg.StateRepoDir)
 	if err != nil {
 		warn("%v", err)
-		return
+		return err
 	}
 	defer lock.Release()
 
@@ -137,7 +191,7 @@ func runAgentTick(ctx context.Context, cfg AgentConfig) {
 		// snapshot write can still land.
 		if err := ctx.Err(); err != nil {
 			warn("agent tick aborted: %v", err)
-			return
+			return err
 		}
 		// Continue: local write still useful even if pull failed.
 	}
@@ -148,7 +202,7 @@ func runAgentTick(ctx context.Context, cfg AgentConfig) {
 		if err := ctx.Err(); err != nil {
 			warn("agent tick aborted: %v", err)
 		}
-		return
+		return err
 	}
 	if debugMode {
 		if committed {
@@ -160,6 +214,7 @@ func runAgentTick(ctx context.Context, cfg AgentConfig) {
 		fmt.Printf("Published snapshot at %s (%d repos)\n",
 			snap.UpdatedAt.Format(time.RFC3339), len(snap.Repos))
 	}
+	return nil
 }
 
 // smokePublishOnce runs one scan+publish for install-scheduler verification.

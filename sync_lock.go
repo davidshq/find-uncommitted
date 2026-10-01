@@ -12,7 +12,13 @@ import (
 // ErrStateRepoBusy means another process holds the state-repo sync lock (agent publishing).
 var ErrStateRepoBusy = errors.New("state repo sync in progress")
 
-const stateRepoSyncLockName = ".find-uncommitted-sync.lock"
+const stateRepoSyncLockName = "find-uncommitted-sync.lock"
+
+// legacyStateRepoSyncLockName is the pre-2026-10 lock in the worktree root.
+// It showed up as an untracked file in every clone, which led to a manual
+// .gitignore commit that blocked XPS's rebase for 31h. Kept as a fallback for
+// clones whose .git is not a directory, and so doctor can ignore leftovers.
+const legacyStateRepoSyncLockName = ".find-uncommitted-sync.lock"
 
 // stateRepoSyncLockPoll is how often a context-aware wait retries LOCK_NB.
 const stateRepoSyncLockPoll = 50 * time.Millisecond
@@ -22,8 +28,15 @@ type stateRepoSyncLock struct {
 	path string
 }
 
+// stateRepoSyncLockPath keeps the lock inside .git so the agent never leaves
+// untracked files in the worktree. Falls back to the worktree root when .git
+// is missing or a file (linked worktree/submodule), matching rebaseInProgress.
 func stateRepoSyncLockPath(stateRepoDir string) string {
-	return filepath.Join(stateRepoDir, stateRepoSyncLockName)
+	gitDir := filepath.Join(stateRepoDir, ".git")
+	if st, err := os.Stat(gitDir); err == nil && st.IsDir() {
+		return filepath.Join(gitDir, stateRepoSyncLockName)
+	}
+	return filepath.Join(stateRepoDir, legacyStateRepoSyncLockName)
 }
 
 // tryAcquireStateRepoSyncLock grabs the lock without blocking.

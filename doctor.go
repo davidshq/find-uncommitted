@@ -118,6 +118,7 @@ func collectDoctorReport(ctx context.Context, in DoctorInput) doctorReport {
 			r.ok("state_repo: %s", in.StateRepo)
 			checkStateRepoRemote(ctx, &r, in.StateRepo)
 			checkSyncLock(&r, in.StateRepo)
+			checkStateRepoUntracked(ctx, &r, in.StateRepo)
 			checkLastPublish(ctx, &r, in)
 		}
 	}
@@ -193,6 +194,31 @@ func checkLastPublish(ctx context.Context, r *doctorReport, in DoctorInput) {
 		return
 	}
 	r.ok("%s", line)
+}
+
+// checkStateRepoUntracked warns on untracked files in the state clone. The
+// agent owns the clone and never leaves any; one that upstream later tracks
+// makes every pull --rebase refuse to start (XPS, 2026-09-29: .gitignore).
+func checkStateRepoUntracked(ctx context.Context, r *doctorReport, stateRepo string) {
+	out, stderr, err := gitexec.Run(ctx, stateRepo, "status", "--porcelain", "--untracked-files=normal")
+	if err != nil {
+		r.warn("state-repo worktree: could not list untracked files (%s)", strings.TrimSpace(stderr))
+		return
+	}
+	var paths []string
+	for _, line := range strings.Split(out, "\n") {
+		path, ok := strings.CutPrefix(line, "?? ")
+		if !ok || path == legacyStateRepoSyncLockName {
+			continue // pre-.git lock left by older binaries; harmless, delete at will
+		}
+		paths = append(paths, path)
+	}
+	if len(paths) == 0 {
+		r.ok("state-repo worktree: no untracked files")
+		return
+	}
+	r.warn("state-repo worktree has untracked files (%s); if upstream starts tracking one, every agent pull fails — remove them or commit from this clone",
+		strings.Join(paths, ", "))
 }
 
 // unpublishedSnapshotReason returns why the local snapshot may not have reached

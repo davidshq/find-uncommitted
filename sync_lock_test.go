@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -93,4 +95,25 @@ func TestStateRepoSyncLockConcurrentCLIAndAgent(t *testing.T) {
 	}()
 	wg.Wait()
 	agentLock.Release()
+}
+
+func TestStateRepoSyncLockLivesInsideGitDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := acquireStateRepoSyncLockBlocking(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Release()
+
+	if want := filepath.Join(dir, ".git", stateRepoSyncLockName); lock.path != want {
+		t.Fatalf("lock path = %s, want %s", lock.path, want)
+	}
+	// The worktree must stay free of agent droppings: an untracked lock file
+	// is what invited the .gitignore commit that blocked XPS for 31h.
+	if _, err := os.Stat(filepath.Join(dir, legacyStateRepoSyncLockName)); !os.IsNotExist(err) {
+		t.Fatalf("legacy worktree lock created: %v", err)
+	}
 }
