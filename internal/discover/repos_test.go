@@ -186,10 +186,10 @@ func TestFindGitReposUnreadableRootIsError(t *testing.T) {
 		t.Skip("root ignores directory permissions")
 	}
 	root := filepath.Join(t.TempDir(), "locked")
-	if err := os.Mkdir(root, 0o000); err != nil {
+	if err := os.Mkdir(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
+	lockDirListing(t, root)
 	if repos, err := FindGitRepos(root, WalkOptions{}); err == nil {
 		t.Fatalf("expected error for unreadable root, got repos %v", repos)
 	}
